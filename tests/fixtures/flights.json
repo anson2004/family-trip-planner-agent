@@ -1,0 +1,28 @@
+{
+  "search_metadata": {"google_flights_url": "https://www.google.com/travel/flights?test=1"},
+  "best_flights": [
+    {
+      "flights": [
+        {"departure_airport": {"name": "Tampere-Pirkkala", "id": "TMP", "time": "2027-02-14 06:10"},
+         "arrival_airport": {"name": "Helsinki", "id": "HEL", "time": "2027-02-14 06:55"},
+         "duration": 45, "airline": "Finnair", "flight_number": "AY 312"},
+        {"departure_airport": {"name": "Helsinki", "id": "HEL", "time": "2027-02-14 08:30"},
+         "arrival_airport": {"name": "Gran Canaria", "id": "LPA", "time": "2027-02-14 13:05"},
+         "duration": 395, "airline": "Finnair", "flight_number": "AY 1785"}
+      ],
+      "layovers": [{"duration": 95, "name": "Helsinki", "id": "HEL"}],
+      "total_duration": 535, "price": 1450, "type": "Round trip"
+    }
+  ],
+  "other_flights": [
+    {
+      "flights": [
+        {"departure_airport": {"name": "Helsinki", "id": "HEL", "time": "2027-02-14 07:00"},
+         "arrival_airport": {"name": "Gran Canaria", "id": "LPA", "time": "2027-02-14 11:40"},
+         "duration": 400, "airline": "Norwegian", "flight_number": "D8 4521"}
+      ],
+      "total_duration": 400, "price": 1100, "type": "Round trip"
+    },
+    {"flights": [], "price": 10}
+  ]
+}

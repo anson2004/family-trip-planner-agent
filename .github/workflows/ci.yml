@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      # No real secrets: the tests use a scripted fake LLM and mocked HTTP for SerpApi/Tavily,
+      # so they never call Groq or any other paid API. Dummy values make sure of it.
+      GROQ_API_KEY: ci-dummy
+      SERPAPI_API_KEY: ci-dummy
+      TAVILY_API_KEY: ci-dummy
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --locked
+
+      - name: Format
+        run: uv run ruff format --check src tests
+
+      - name: Lint
+        run: uv run ruff check src tests
+
+      - name: Type check
+        run: uv run mypy src tests
+
+      - name: Tests
+        run: uv run pytest -q

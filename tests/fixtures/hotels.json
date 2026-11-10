@@ -1,0 +1,15 @@
+{
+  "search_metadata": {"google_hotels_url": "https://www.google.com/travel/hotels?test=1"},
+  "properties": [
+    {"type": "hotel", "name": "Family Beach Resort", "link": "https://hotel.example/fbr",
+     "rate_per_night": {"lowest": "€150", "extracted_lowest": 150},
+     "total_rate": {"lowest": "€1,050", "extracted_lowest": 1050},
+     "overall_rating": 4.4, "reviews": 2310, "extracted_hotel_class": 4,
+     "amenities": ["Pool", "Kids' club", "Free Wi-Fi"],
+     "prices": [{"source": "Booking.com"}, {"source": "Family Beach Resort"}]},
+    {"type": "vacation rental", "name": "Sea View Apartment",
+     "rate_per_night": {"lowest": "€90", "extracted_lowest": 90},
+     "overall_rating": 4.7, "reviews": 88},
+    {"type": "hotel", "name": "No Price Hotel"}
+  ]
+}
