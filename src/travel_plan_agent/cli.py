@@ -69,8 +69,8 @@ def plan(
         raise typer.Exit(1) from exc
 
     console.print(
-        f"Planning [bold]{request.origin_label} -> {request.destination_label}[/bold], {request.depart} to "
-        f"{request.return_date}, {request.party_label()}, "
+        f"Planning [bold]{request.origin_label} -> {request.destination_label}[/bold], {request.dates_label()}, "
+        f"{request.party_label()}, "
         f"budget {request.budget_min:.0f}-{request.budget_max:.0f} {request.currency}"
     )
     log = (lambda _m: None) if quiet else (lambda m: console.print(f"  [dim]searching: {m}[/dim]"))
@@ -121,6 +121,7 @@ def render(plan: TravelPlan) -> None:
             out = f.outbound_legs
             flight = (
                 f"{f.departure_airport}->{f.arrival_airport}, {'nonstop' if f.stops == 0 else f'{f.stops} stop(s)'}\n"
+                f"{f.outbound_date:%a %d %b} – {f.return_date:%a %d %b}\n"
                 f"{', '.join(f.airlines)}\nout {out[0].departs}\n{f.price_total:.0f} {cur}"
             )
             if p.ground_transfer:

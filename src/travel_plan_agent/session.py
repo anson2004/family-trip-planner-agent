@@ -85,6 +85,12 @@ class TripSession:
             if flight is None or hotel is None:
                 warnings.append(f"Dropped a package with unknown IDs {pick.flight_id}/{pick.hotel_id}.")
                 continue
+            if flight.outbound_date != hotel.check_in or flight.return_date != hotel.check_out:
+                warnings.append(
+                    f"Dropped {flight.id}+{hotel.id}: the flight ({flight.outbound_date}) and the stay "
+                    f"({hotel.check_in}) are on different dates."
+                )
+                continue
             if (flight.id, hotel.id) in seen:
                 continue
             seen.add((flight.id, hotel.id))

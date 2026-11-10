@@ -5,7 +5,7 @@ import httpx
 import pytest
 import respx
 
-from tests.test_core import load, make_request
+from tests.test_core import DATES, load, make_request
 from travel_plan_agent.config import Settings
 from travel_plan_agent.email_report import build_email, sample_plan
 from travel_plan_agent.models import AgencyPick, PackagePick, PlanDraft, TravelPlan, Usage, WebResult
@@ -17,8 +17,8 @@ from travel_plan_agent.session import TripSession
 
 def make_plan() -> TravelPlan:
     session = TripSession(request=make_request(), origin=resolve_origin("Tampere"))
-    session.add_flights(parse_flights(load("flights.json"), "EUR", "x"))
-    session.add_hotels(parse_hotels(load("hotels.json"), "Gran Canaria", 7, "EUR", "x"))
+    session.add_flights(parse_flights(load("flights.json"), "EUR", "x", DATES))
+    session.add_hotels(parse_hotels(load("hotels.json"), "Gran Canaria", "EUR", "x", DATES))
     session.add_web([WebResult(id="x", title="Tjäreborg <Gran Canaria>", url="https://tjareborg.fi/gc", snippet="")])
     draft = PlanDraft(
         summary="Fly from Tampere & stay by the beach.",

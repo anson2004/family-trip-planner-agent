@@ -24,6 +24,7 @@ from travel_plan_agent.providers.serpapi import SERPAPI_URL, SerpApiClient, pars
 from travel_plan_agent.session import TripSession
 
 FIXTURES = Path(__file__).parent / "fixtures"
+DATES = (date(2027, 2, 14), date(2027, 2, 21))
 
 
 def load(name: str) -> dict[str, Any]:
@@ -122,7 +123,7 @@ def test_multiple_destinations_from_env(tmp_path: Path, monkeypatch: pytest.Monk
 
 
 def test_parse_flights() -> None:
-    flights = parse_flights(load("flights.json"), "EUR", "F")
+    flights = parse_flights(load("flights.json"), "EUR", "F", DATES)
     assert len(flights) == 2  # the item without legs is skipped
     best = flights[0]
     assert best.is_best and best.price_total == 1450
@@ -131,7 +132,7 @@ def test_parse_flights() -> None:
 
 
 def test_parse_hotels_falls_back_to_nightly_rate() -> None:
-    hotels = parse_hotels(load("hotels.json"), "Gran Canaria", nights=7, currency="EUR", id_prefix="H")
+    hotels = parse_hotels(load("hotels.json"), "Gran Canaria", "EUR", "H", DATES)
     assert [h.name for h in hotels] == ["Family Beach Resort", "Sea View Apartment"]
     assert hotels[0].total_price == 1050 and hotels[0].sellers == ["Booking.com", "Family Beach Resort"]
     assert hotels[1].total_price == 630  # 90 x 7 nights
@@ -143,28 +144,28 @@ def test_serpapi_params_and_cache(tmp_path: Path) -> None:
     route = respx.get(SERPAPI_URL).mock(return_value=httpx.Response(200, json=load("flights.json")))
     client = SerpApiClient("key", JsonCache(tmp_path, 1))
     req = make_request(children_ages=[6, 1])
-    flights, cached = client.search_flights(req, ["TMP", "HEL"], ["LPA"], max_stops=1, id_prefix="F")
+    flights, cached = client.search_flights(req, DATES, ["TMP", "HEL"], ["LPA"], max_stops=1, id_prefix="F")
     assert len(flights) == 2 and not cached
     params = route.calls[0].request.url.params
     assert params["departure_id"] == "TMP,HEL"
-    assert params["adults"] == "2" and params["children"] == "1" and params["infant_on_lap"] == "1"
+    assert params["adults"] == "2" and params["children"] == "1" and params["infants_on_lap"] == "1"
     assert params["stops"] == "2" and params["type"] == "1" and params["gl"] == "fi"
 
-    _, cached = client.search_flights(req, ["TMP", "HEL"], ["LPA"], max_stops=1, id_prefix="F")
+    _, cached = client.search_flights(req, DATES, ["TMP", "HEL"], ["LPA"], max_stops=1, id_prefix="F")
     assert cached and route.call_count == 1 and client.live_calls == 1
 
 
 def test_hotel_params() -> None:
     client = SerpApiClient("key", JsonCache(Path("/nonexistent"), 1))
-    params = client.hotel_params(make_request(children_ages=[6, 0]), "Maspalomas", 200, 4.2, "price")
+    params = client.hotel_params(make_request(children_ages=[6, 0]), DATES, "Maspalomas", 200, 4.2, "price")
     assert params["children"] == 2 and params["children_ages"] == "6,1"
     assert params["rating"] == 8 and params["max_price"] == 200 and params["sort_by"] == 3
 
 
 def test_session_prices_and_builds_plan() -> None:
     session = TripSession(request=make_request(), origin=resolve_origin("Tampere"))
-    flights = session.add_flights(parse_flights(load("flights.json"), "EUR", "x"))
-    hotels = session.add_hotels(parse_hotels(load("hotels.json"), "Gran Canaria", 7, "EUR", "x"))
+    flights = session.add_flights(parse_flights(load("flights.json"), "EUR", "x", DATES))
+    hotels = session.add_hotels(parse_hotels(load("hotels.json"), "Gran Canaria", "EUR", "x", DATES))
     session.add_web([WebResult(id="x", title="Tjäreborg Gran Canaria", url="https://tjareborg.fi/x", snippet="")])
     assert [f.id for f in flights] == ["F1", "F2"] and [h.id for h in hotels] == ["H1", "H2"]
 

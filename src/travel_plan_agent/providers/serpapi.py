@@ -1,11 +1,12 @@
 """Google Flights and Google Hotels through SerpApi (https://serpapi.com)."""
 
+from datetime import date
 from typing import Any, Literal
 
 import httpx
 
 from travel_plan_agent.cache import JsonCache
-from travel_plan_agent.models import FlightLeg, FlightOption, HotelOption, TripRequest
+from travel_plan_agent.models import DatePrice, FlightLeg, FlightOption, HotelOption, TripRequest
 from travel_plan_agent.passengers import flight_passengers, hotel_children_ages
 
 SERPAPI_URL = "https://serpapi.com/search.json"
@@ -15,6 +16,8 @@ _STOPS_PARAM = {0: 1, 1: 2, 2: 3}
 # SerpApi hotel `rating`: 7 = 3.5+, 8 = 4.0+, 9 = 4.5+.
 _RATING_PARAM = ((4.5, 9), (4.0, 8), (3.5, 7))
 _SORT_PARAM = {"price": 3, "rating": 8, "reviews": 13}
+
+TripDates = tuple[date, date]
 
 
 class SerpApiError(RuntimeError):
@@ -60,15 +63,20 @@ class SerpApiClient:
         return data, False
 
     def flight_params(
-        self, request: TripRequest, departure_ids: list[str], arrival_ids: list[str], max_stops: int | None
+        self,
+        request: TripRequest,
+        dates: TripDates,
+        departure_ids: list[str],
+        arrival_ids: list[str],
+        max_stops: int | None,
     ) -> dict[str, Any]:
         pax = flight_passengers(request.adults, request.children_ages)
         params: dict[str, Any] = {
             "engine": "google_flights",
             "departure_id": ",".join(departure_ids),
             "arrival_id": ",".join(arrival_ids),
-            "outbound_date": request.depart.isoformat(),
-            "return_date": request.return_date.isoformat(),
+            "outbound_date": dates[0].isoformat(),
+            "return_date": dates[1].isoformat(),
             "type": 1,
             "adults": pax.adults,
             "currency": request.currency,
@@ -76,7 +84,7 @@ class SerpApiClient:
         if pax.children:
             params["children"] = pax.children
         if pax.infants_on_lap:
-            params["infant_on_lap"] = pax.infants_on_lap
+            params["infants_on_lap"] = pax.infants_on_lap
         if max_stops is not None:
             params["stops"] = _STOPS_PARAM[max_stops]
         return params
@@ -84,17 +92,43 @@ class SerpApiClient:
     def search_flights(
         self,
         request: TripRequest,
+        dates: TripDates,
         departure_ids: list[str],
         arrival_ids: list[str],
         max_stops: int | None,
         id_prefix: str,
     ) -> tuple[list[FlightOption], bool]:
-        data, cached = self._search(self.flight_params(request, departure_ids, arrival_ids, max_stops))
-        return parse_flights(data, request.currency, id_prefix), cached
+        data, cached = self._search(self.flight_params(request, dates, departure_ids, arrival_ids, max_stops))
+        return parse_flights(data, request.currency, id_prefix, dates), cached
+
+    def calendar_params(self, request: TripRequest, departure_id: str, arrival_id: str) -> dict[str, Any]:
+        """Google Flights price calendar: one price per departure date for a fixed trip length."""
+        pax = flight_passengers(request.adults, request.children_ages)
+        params: dict[str, Any] = {
+            "engine": "google_flights_calendar",
+            "departure_id": departure_id,
+            "arrival_id": arrival_id,
+            "type": 1,
+            "date_range_start": request.depart.isoformat(),
+            "date_range_end": request.latest_departure.isoformat(),
+            "round_trip_days": request.nights,
+            "adults": pax.adults,
+            "currency": request.currency,
+        }
+        if pax.children:
+            params["children"] = pax.children
+        if pax.infants_on_lap:
+            params["infants_on_lap"] = pax.infants_on_lap
+        return params
+
+    def search_calendar(self, request: TripRequest, departure_id: str, arrival_id: str) -> tuple[list[DatePrice], bool]:
+        data, cached = self._search(self.calendar_params(request, departure_id, arrival_id))
+        return parse_calendar(data), cached
 
     def hotel_params(
         self,
         request: TripRequest,
+        dates: TripDates,
         location: str,
         max_price_per_night: int | None,
         min_rating: float | None,
@@ -103,8 +137,8 @@ class SerpApiClient:
         params: dict[str, Any] = {
             "engine": "google_hotels",
             "q": location,
-            "check_in_date": request.depart.isoformat(),
-            "check_out_date": request.return_date.isoformat(),
+            "check_in_date": dates[0].isoformat(),
+            "check_out_date": dates[1].isoformat(),
             "adults": request.adults,
             "currency": request.currency,
             "sort_by": _SORT_PARAM[sort_by],
@@ -125,18 +159,19 @@ class SerpApiClient:
     def search_hotels(
         self,
         request: TripRequest,
+        dates: TripDates,
         location: str,
         max_price_per_night: int | None,
         min_rating: float | None,
         sort_by: Literal["price", "rating", "reviews"],
         id_prefix: str,
     ) -> tuple[list[HotelOption], bool]:
-        params = self.hotel_params(request, location, max_price_per_night, min_rating, sort_by)
+        params = self.hotel_params(request, dates, location, max_price_per_night, min_rating, sort_by)
         data, cached = self._search(params)
-        return parse_hotels(data, location, request.nights, request.currency, id_prefix), cached
+        return parse_hotels(data, location, request.currency, id_prefix, dates), cached
 
 
-def parse_flights(data: dict[str, Any], currency: str, id_prefix: str) -> list[FlightOption]:
+def parse_flights(data: dict[str, Any], currency: str, id_prefix: str, dates: TripDates) -> list[FlightOption]:
     """Read SerpApi Google Flights results. The price is the round-trip total for the whole party."""
     url = data.get("search_metadata", {}).get("google_flights_url")
     options: list[FlightOption] = []
@@ -161,6 +196,8 @@ def parse_flights(data: dict[str, Any], currency: str, id_prefix: str) -> list[F
             options.append(
                 FlightOption(
                     id=f"{id_prefix}{len(options) + 1}",
+                    outbound_date=dates[0],
+                    return_date=dates[1],
                     price_total=float(price),
                     currency=currency,
                     departure_airport=legs[0].from_airport,
@@ -176,7 +213,10 @@ def parse_flights(data: dict[str, Any], currency: str, id_prefix: str) -> list[F
     return options
 
 
-def parse_hotels(data: dict[str, Any], location: str, nights: int, currency: str, id_prefix: str) -> list[HotelOption]:
+def parse_hotels(
+    data: dict[str, Any], location: str, currency: str, id_prefix: str, dates: TripDates
+) -> list[HotelOption]:
+    nights = (dates[1] - dates[0]).days
     fallback_url = data.get("search_metadata", {}).get("google_hotels_url")
     options: list[HotelOption] = []
     for prop in data.get("properties") or []:
@@ -190,6 +230,8 @@ def parse_hotels(data: dict[str, Any], location: str, nights: int, currency: str
         options.append(
             HotelOption(
                 id=f"{id_prefix}{len(options) + 1}",
+                check_in=dates[0],
+                check_out=dates[1],
                 name=prop.get("name", "?"),
                 location_query=location,
                 kind=prop.get("type", "hotel"),
@@ -205,3 +247,21 @@ def parse_hotels(data: dict[str, Any], location: str, nights: int, currency: str
             )
         )
     return options
+
+
+def parse_calendar(data: dict[str, Any]) -> list[DatePrice]:
+    """Read the price calendar, cheapest first. Dates without a price are skipped."""
+    rows: list[DatePrice] = []
+    for item in data.get("prices") or []:
+        price, outbound, back = item.get("price"), item.get("outbound_date"), item.get("return_date")
+        if price is None or not outbound or not back:
+            continue
+        rows.append(
+            DatePrice(
+                outbound_date=date.fromisoformat(outbound[:10]),
+                return_date=date.fromisoformat(back[:10]),
+                price=float(price),
+                low_price=bool(item.get("low_price")),
+            )
+        )
+    return sorted(rows, key=lambda r: r.price)

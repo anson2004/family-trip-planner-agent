@@ -35,27 +35,40 @@ SCRIPT = [
     call("search_flights", {"departure_airports": ["TMP", "HEL"], "arrival_airports": ["LPA"]}, 1),
     call("search_hotels", {"location": "Maspalomas, Gran Canaria", "max_price_per_night": 220}, 2),
     call("search_travel_agencies", {"query": "Gran Canaria family package from Tampere"}, 3),
-    call(
-        "PlanDraft",
-        {
-            "summary": "Fly direct from Tampere and stay at a family resort.",
-            "origin_note": "TMP preferred and within budget.",
-            "packages": [
-                {"flight_id": "F2", "hotel_id": "H2", "why": "cheapest"},
-                {"flight_id": "F1", "hotel_id": "H1", "why": "family resort, from Tampere"},
-            ],
-            "agency_deals": [{"result_id": "W1", "quoted_price": "from 899 €/person", "why": "package"}],
-        },
-        4,
+    AIMessage(
+        content="Recommend F1 + H1 (family resort, from Tampere) and F2 + H2 (cheapest). Agency: W1.",
+        usage_metadata={"input_tokens": 4000, "output_tokens": 50, "total_tokens": 4050},
     ),
 ]
+
+# What the conversion call returns: the recommendation as a PlanDraft.
+PLAN = call(
+    "PlanDraft",
+    {
+        "summary": "Fly direct from Tampere and stay at a family resort.",
+        "origin_note": "TMP preferred and within budget.",
+        "packages": [
+            {"flight_id": "F2", "hotel_id": "H2", "why": "cheapest"},
+            {"flight_id": "F1", "hotel_id": "H1", "why": "family resort, from Tampere"},
+        ],
+        "agency_deals": [{"result_id": "W1", "quoted_price": "from 899 €/person", "why": "package"}],
+    },
+    5,
+)
+
+
+def is_conversion(messages: list[BaseMessage]) -> bool:
+    first = messages[0].content
+    return isinstance(first, str) and first.startswith("Convert the travel plan")
 
 
 class ScriptedModel(BaseChatModel):
     """Returns the scripted messages in order and records what the tools sent back."""
 
     script: list[AIMessage]
+    plan: AIMessage = PLAN
     seen_tool_results: list[str] = []
+    conversions: int = 0
 
     @property
     def _llm_type(self) -> str:
@@ -67,6 +80,9 @@ class ScriptedModel(BaseChatModel):
     def _generate(
         self, messages: list[BaseMessage], stop: Any = None, run_manager: Any = None, **kw: Any
     ) -> ChatResult:
+        if is_conversion(messages):
+            self.conversions += 1
+            return ChatResult(generations=[ChatGeneration(message=self.plan)])
         self.seen_tool_results = [str(m.content) for m in messages if isinstance(m, ToolMessage)]
         step = sum(1 for m in messages if isinstance(m, AIMessage))
         return ChatResult(generations=[ChatGeneration(message=self.script[step])])
@@ -98,13 +114,15 @@ def test_agent_end_to_end(tmp_path: Path) -> None:
     assert plan.packages[1].ground_transfer == 150  # HEL flight from Tampere: 3 x 50
     assert plan.agency_deals[0].result.url == "https://tjareborg.fi/gc"
     u = plan.usage
-    assert (u.serpapi_searches, u.tavily_searches, u.llm_calls) == (2, 1, 4)
-    assert (u.input_tokens, u.output_tokens, u.total_tokens) == (10000, 200, 10200)
+    assert (u.serpapi_searches, u.tavily_searches, u.llm_calls) == (2, 1, 5)  # 4 agent steps + 1 conversion
+    assert (u.input_tokens, u.output_tokens, u.total_tokens) == (15000, 250, 15250)
+    assert model.conversions == 1
     assert any("with F1 (TMP): 2500 total, within budget" in r for r in model.seen_tool_results)
-    assert logs[0] == "Flights TMP,HEL -> LPA"
-    assert [c.input_tokens for c in u.calls] == [1000, 2000, 3000, 4000]
+    assert logs[0] == "Flights TMP,HEL -> LPA (2027-02-14)"
+    assert [c.input_tokens for c in u.calls] == [1000, 2000, 3000, 4000, 5000]
     assert u.calls[0].action == "search_flights(departure_airports=['TMP', 'HEL'], arrival_airports=['LPA'])"
-    assert u.calls[-1].action == "final answer (PlanDraft)"
+    assert u.calls[-2].action == "final recommendation (text)"
+    assert u.calls[-1].action == "convert recommendation into plan"
 
 
 def test_tools_are_typed() -> None:
@@ -121,13 +139,13 @@ def test_tools_are_typed() -> None:
     assert "IATA" in schema["properties"]["departure_airports"]["description"]
 
 
-def _tool_use_failed() -> groq.BadRequestError:
+def _generation_error(code: str = "tool_use_failed") -> groq.BadRequestError:
     """The error Groq returns when the model writes text where a tool call was required."""
     body = {
         "error": {
             "message": "Tool choice is required, but model did not call a tool",
             "type": "invalid_request_error",
-            "code": "tool_use_failed",
+            "code": code,
             "failed_generation": "**PlanDraft**\n| 1 | **F1** | **H1** | resort |\n| 2 | **F2** | **H2** | cheap |",
         }
     }
@@ -139,20 +157,19 @@ class FlakyFinalModel(ScriptedModel):
     """Follows the script, but the final answer fails `fail_times` times, like gpt-oss on Groq did."""
 
     fail_times: int
+    error_code: str = "tool_use_failed"
     final_attempts: int = 0
-    conversions: int = 0
 
     def _generate(
         self, messages: list[BaseMessage], stop: Any = None, run_manager: Any = None, **kw: Any
     ) -> ChatResult:
-        if isinstance(messages[0].content, str) and messages[0].content.startswith("Convert the travel plan"):
-            self.conversions += 1
-            return ChatResult(generations=[ChatGeneration(message=SCRIPT[-1])])
+        if is_conversion(messages):
+            return super()._generate(messages, stop, run_manager, **kw)
         step = sum(1 for m in messages if isinstance(m, AIMessage))
         if step == len(self.script) - 1:
             self.final_attempts += 1
             if self.final_attempts <= self.fail_times:
-                raise _tool_use_failed()
+                raise _generation_error(self.error_code)
         return super()._generate(messages, stop, run_manager, **kw)
 
 
@@ -171,24 +188,38 @@ def no_sleep(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @respx.mock
-def test_retries_when_final_answer_is_text(tmp_path: Path, no_sleep: None) -> None:
+@pytest.mark.parametrize("code", ["tool_use_failed", "output_parse_failed"])
+def test_retries_when_groq_cannot_read_the_reply(tmp_path: Path, no_sleep: None, code: str) -> None:
     _mock_apis()
     settings = Settings(groq_api_key="x", serpapi_api_key="x", tavily_api_key="x", cache_dir=tmp_path, _env_file=None)
-    model = FlakyFinalModel(script=SCRIPT, fail_times=1)
+    model = FlakyFinalModel(script=SCRIPT, fail_times=1, error_code=code)
     plan = plan_trip(make_request(), settings, model=model)
-    assert model.final_attempts == 2 and model.conversions == 0
+    assert model.final_attempts == 2 and model.conversions == 1
     assert [p.why for p in plan.packages] == ["family resort, from Tampere", "cheapest"]
 
 
 @respx.mock
-def test_converts_text_answer_when_retries_fail(tmp_path: Path, no_sleep: None) -> None:
+@pytest.mark.parametrize("code", ["tool_use_failed", "output_parse_failed"])
+def test_uses_failed_generation_when_retries_fail(tmp_path: Path, no_sleep: None, code: str) -> None:
     _mock_apis()
     settings = Settings(groq_api_key="x", serpapi_api_key="x", tavily_api_key="x", cache_dir=tmp_path, _env_file=None)
-    model = FlakyFinalModel(script=SCRIPT, fail_times=99)
+    model = FlakyFinalModel(script=SCRIPT, fail_times=99, error_code=code)
     logs: list[str] = []
     plan = plan_trip(make_request(), settings, log=logs.append, model=model)
     assert model.final_attempts == 3  # first try + 2 retries
     assert model.conversions == 1
-    assert "Model answered in text; converting it into the plan" in logs
+    assert "Model reply was malformed; using its text" in logs
     assert len(plan.packages) == 2 and plan.packages[0].total == 2500  # priced from the saved search results
     assert plan.usage.serpapi_searches == 2  # nothing was searched again
+
+
+def test_other_errors_are_not_hidden(tmp_path: Path) -> None:
+    class Broken(ScriptedModel):
+        def _generate(
+            self, messages: list[BaseMessage], stop: Any = None, run_manager: Any = None, **kw: Any
+        ) -> ChatResult:
+            raise RuntimeError("network down")
+
+    settings = Settings(groq_api_key="x", serpapi_api_key="x", cache_dir=tmp_path, _env_file=None)
+    with pytest.raises(RuntimeError, match="network down"):
+        plan_trip(make_request(), settings, model=Broken(script=SCRIPT))

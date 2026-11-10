@@ -74,6 +74,8 @@ class TripSettings(BaseSettings):
     )
     depart: date = Field(validation_alias="TRIP_DEPART")
     return_date: date = Field(validation_alias="TRIP_RETURN")
+    # Optional trip length. When set, TRIP_DEPART/TRIP_RETURN are the search window.
+    trip_days: int | None = Field(default=None, validation_alias="TRIP_DAYS")
     budget: str = Field(validation_alias="TRIP_BUDGET")
     adults: int = Field(default=2, validation_alias="TRIP_ADULTS")
     children_ages: Annotated[list[int], NoDecode] = Field(default_factory=list, validation_alias="TRIP_CHILDREN_AGES")
@@ -123,6 +125,7 @@ class TripSettings(BaseSettings):
             transfer_costs=self.transfer_costs,
             depart=self.depart,
             return_date=self.return_date,
+            trip_days=self.trip_days,
             budget_min=budget_min,
             budget_max=budget_max,
             adults=self.adults,

@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, timedelta
 from enum import StrEnum
 from typing import Self
 
@@ -12,8 +12,11 @@ class TripRequest(BaseModel):
     destinations: list[str] = Field(min_length=1, max_length=5)
     # Return-trip ground cost per traveller to reach a departure airport, overriding the estimates.
     transfer_costs: dict[str, float] = Field(default_factory=dict)
+    # Without trip_days these are the exact travel dates. With trip_days they are the search
+    # window: leave on or after `depart`, be back by `return_date`.
     depart: date
     return_date: date
+    trip_days: int | None = Field(default=None, ge=1, le=60)
     budget_min: float = Field(ge=0)
     budget_max: float = Field(gt=0)
     adults: int = Field(default=2, ge=1, le=9)
@@ -27,6 +30,8 @@ class TripRequest(BaseModel):
     def _check(self) -> Self:
         if self.return_date <= self.depart:
             raise ValueError("return date must be after departure date")
+        if self.trip_days is not None and self.trip_days > (self.return_date - self.depart).days:
+            raise ValueError(f"trip of {self.trip_days} days doesn't fit between {self.depart} and {self.return_date}")
         if self.budget_min > self.budget_max:
             raise ValueError("budget_min must not exceed budget_max")
         if any(a < 0 or a > 17 for a in self.children_ages):
@@ -45,7 +50,33 @@ class TripRequest(BaseModel):
 
     @property
     def nights(self) -> int:
-        return (self.return_date - self.depart).days
+        """Length of the trip: days between leaving and coming back."""
+        return self.trip_days if self.trip_days is not None else (self.return_date - self.depart).days
+
+    @property
+    def flexible(self) -> bool:
+        """True when there is more than one possible departure date."""
+        return self.latest_departure > self.depart
+
+    @property
+    def latest_departure(self) -> date:
+        return self.return_date - timedelta(days=self.nights)
+
+    def dates_from(self, outbound: date) -> tuple[date, date]:
+        """Travel dates for a trip starting on `outbound`; raises if it falls outside the window."""
+        if not self.depart <= outbound <= self.latest_departure:
+            raise ValueError(
+                f"departure must be between {self.depart} and {self.latest_departure} for a {self.nights}-day trip"
+            )
+        return outbound, outbound + timedelta(days=self.nights)
+
+    def dates_label(self) -> str:
+        if self.flexible:
+            return (
+                f"{self.nights} days, leaving {self.depart:%d %b} – {self.latest_departure:%d %b %Y}"
+                f" (back by {self.return_date:%d %b})"
+            )
+        return f"{self.depart:%d %b} – {self.return_date:%d %b %Y}"
 
     @property
     def travellers(self) -> int:
@@ -70,6 +101,8 @@ class FlightLeg(BaseModel):
 
 class FlightOption(BaseModel):
     id: str
+    outbound_date: date
+    return_date: date
     price_total: float
     currency: str
     departure_airport: str
@@ -84,6 +117,8 @@ class FlightOption(BaseModel):
 
 class HotelOption(BaseModel):
     id: str
+    check_in: date
+    check_out: date
     name: str
     location_query: str
     kind: str
@@ -96,6 +131,15 @@ class HotelOption(BaseModel):
     amenities: list[str] = Field(default_factory=list)
     sellers: list[str] = Field(default_factory=list)
     url: str | None
+
+
+class DatePrice(BaseModel):
+    """One row of the Google Flights price calendar: a possible trip and its approximate price."""
+
+    outbound_date: date
+    return_date: date
+    price: float
+    low_price: bool = False
 
 
 class WebResult(BaseModel):

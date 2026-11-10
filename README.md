@@ -33,7 +33,8 @@ uv run travel-plan --env-file trips/turkey.env   # another trip file (needs the 
 | `TRIP_FROM` | `Tampere` or `Tampere,Turku` | Finnish city or airport code; comma-separate for several. The first is home (no transfer cost). HEL is added as a fallback with an estimated train cost (edit it in `src/travel_plan_agent/origins.py`) |
 | `TRIP_TO` | `Gran Canaria` or `Gran Canaria,Tenerife,Madeira` | City, island, region or country; up to 5 comma-separated are compared in one plan. The agent picks the airports |
 | `TRIP_TRANSFER_COSTS` | `TKU:40,HEL:50` | Optional return-trip ground cost per traveller to other departure airports |
-| `TRIP_DEPART`, `TRIP_RETURN` | `2027-02-14` | YYYY-MM-DD |
+| `TRIP_DEPART`, `TRIP_RETURN` | `2027-02-14`, `2027-02-28` | YYYY-MM-DD. Exact dates, or the search window when `TRIP_DAYS` is set |
+| `TRIP_DAYS` | `7` | Optional trip length. The agent checks the Google Flights price calendar and picks the cheapest dates in the window |
 | `TRIP_BUDGET` | `2000-3500` | Total EUR for flights + accommodation for everyone, or just a max like `3500` |
 | `TRIP_ADULTS` | `2` | |
 | `TRIP_CHILDREN_AGES` | `6,3` | Under-2s fly as lap infants, 12+ pay adult fares. Empty = no children |
@@ -54,6 +55,7 @@ Resend account's email. To send to other people, verify a domain in Resend and s
 ```
 CLI -> TripRequest (dates, party, budget: fixed, not chosen by the LLM)
     -> LangChain agent (Groq) with tools:
+         find_cheapest_dates   SerpApi Google Flights price calendar (only with TRIP_DAYS)
          search_flights        SerpApi Google Flights, all departure/arrival airports in one call
          search_hotels         SerpApi Google Hotels; each stay is shown with exact package totals
          search_travel_agencies Tavily, limited to Finnish tour operators (Tjäreborg, Aurinkomatkat, TUI, ...)
@@ -64,7 +66,7 @@ The LLM never writes prices. Each result gets an ID, the agent returns the IDs i
 `session.py` works out the totals from the real API data. Unknown IDs are dropped.
 
 SerpApi results are cached in `~/.cache/travel-plan-agent` for 12 hours, so re-running costs nothing.
-`MAX_SERPAPI_CALLS` caps the live searches per plan (default 4 + 2 per destination).
+`MAX_SERPAPI_CALLS` caps the live searches per plan (default 4 + 2 per destination, +1 per destination with `TRIP_DAYS`).
 
 ## Development
 

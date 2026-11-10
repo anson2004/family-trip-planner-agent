@@ -1,0 +1,9 @@
+{
+  "search_metadata": {"status": "Success"},
+  "prices": [
+    {"outbound_date": "2027-02-14", "return_date": "2027-02-21", "price": 1450},
+    {"outbound_date": "2027-02-17", "return_date": "2027-02-24", "price": 1180, "low_price": true},
+    {"outbound_date": "2027-02-18", "return_date": "2027-02-25"},
+    {"outbound_date": "2027-02-20", "return_date": "2027-02-27", "price": 1320}
+  ]
+}

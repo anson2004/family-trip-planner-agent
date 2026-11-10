@@ -36,7 +36,7 @@ def _link(url: str | None, label: str) -> str:
 
 def build_email(plan: TravelPlan) -> EmailContent:
     r, cur = plan.request, plan.request.currency
-    title = f"{r.origin_label} → {r.destination_label}, {r.depart:%d %b} – {r.return_date:%d %b %Y}"
+    title = f"{r.origin_label} → {r.destination_label}, {r.dates_label()}"
     best = next((p for p in plan.packages if p.budget_status is BudgetStatus.WITHIN), None)
     subject = f"Trip plan: {title}" + (f" · from {best.total:.0f} {cur}" if best else "")
     trip_line = f"{r.party_label()} · {r.nights} nights · budget {r.budget_min:.0f}–{r.budget_max:.0f} {cur}"
@@ -55,6 +55,7 @@ def build_email(plan: TravelPlan) -> EmailContent:
             f'<td style="{_CELL};color:{color};white-space:nowrap"><b>{p.total:.0f} {cur}</b><br>'
             f"{escape(p.budget_status.value)}</td>"
             f'<td style="{_CELL}">{escape(f.departure_airport)} → {escape(f.arrival_airport)}, {_stops(p)}<br>'
+            f"{f.outbound_date:%a %d %b} – {f.return_date:%a %d %b}<br>"
             f"{escape(', '.join(f.airlines))}<br>out {escape(f.outbound_legs[0].departs)}<br>"
             f"{f.price_total:.0f} {cur}{transfer}<br>{_link(f.booking_url, 'Google Flights')}</td>"
             f'<td style="{_CELL}">{escape(h.name)}{escape(rating)}<br>in {escape(h.location_query)}<br>'
@@ -97,7 +98,8 @@ def build_email(plan: TravelPlan) -> EmailContent:
     for i, p in enumerate(plan.packages, start=1):
         f, h = p.flight, p.hotel
         lines += [
-            f"{i}. {p.total:.0f} {cur} ({p.budget_status.value})",
+            f"{i}. {p.total:.0f} {cur} ({p.budget_status.value}), "
+            f"{f.outbound_date:%a %d %b} - {f.return_date:%a %d %b}",
             f"   Flight: {f.departure_airport} -> {f.arrival_airport}, {_stops(p)}, {', '.join(f.airlines)}, "
             f"{f.price_total:.0f} {cur}" + (f" + {p.ground_transfer:.0f} transfer" if p.ground_transfer else ""),
             f"   Stay:   {h.name}, {h.location_query}, {h.total_price:.0f} {cur} total",
@@ -132,6 +134,8 @@ def sample_plan() -> TravelPlan:
     )
     flight = FlightOption(
         id="F1",
+        outbound_date=request.depart,
+        return_date=request.return_date,
         price_total=1450,
         currency="EUR",
         departure_airport="TMP",
@@ -144,6 +148,8 @@ def sample_plan() -> TravelPlan:
     )
     hotel = HotelOption(
         id="H1",
+        check_in=request.depart,
+        check_out=request.return_date,
         name="Sample Family Resort",
         location_query="Maspalomas, Gran Canaria",
         kind="hotel",
