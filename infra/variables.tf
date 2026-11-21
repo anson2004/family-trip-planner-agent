@@ -3,6 +3,16 @@ variable "project_id" {
   type        = string
 }
 
+variable "github_repo" {
+  description = "GitHub repository (owner/name) whose master branch may build and deploy"
+  type        = string
+}
+
+variable "image" {
+  description = "Container image to run, e.g. <repo>/app@sha256:... (deploy.sh passes the newest one)"
+  type        = string
+}
+
 variable "region" {
   description = "Where the job and its images live"
   type        = string

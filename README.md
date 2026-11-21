@@ -83,25 +83,47 @@ gcloud init                              # log in and pick the project
 gcloud auth application-default login    # lets OpenTofu use your login
 ```
 
-Deploy:
+Pushing to `master` deploys by itself, in three separate GitHub Actions workflows:
+
+```
+push to master ─► CI (tests) ─► Build (image → Artifact Registry) ─► Deploy (infra/deploy.sh → tofu apply)
+```
+
+GitHub logs in to Google Cloud with Workload Identity Federation: no key is stored in GitHub, and only
+workflows on `master` of this repository are accepted. The OpenTofu state and `terraform.tfvars` live in
+the `<project-id>-tfstate` bucket (versioned), so your Mac and GitHub Actions share them.
+
+### One-time setup (from your Mac)
 
 ```bash
 infra/set-secrets.sh <project-id>        # copies the API keys from .env into Secret Manager
-cp infra/terraform.tfvars.example infra/terraform.tfvars   # project id + TRIP_* settings, no keys
-cd infra
-tofu init
-tofu apply                               # builds the image with Cloud Build and creates everything
+cp infra/terraform.tfvars.example infra/terraform.tfvars   # project id, repo, TRIP_* settings; no keys
+infra/bootstrap-state.sh <project-id>    # creates the state bucket
+IMAGE=<an existing image> PROJECT_ID=<project-id> infra/deploy.sh
 ```
 
-- **Code changed?** Run `tofu apply` again. It builds a new image only when `src/`, the Dockerfile or the lock
-  file changed.
+The first `deploy.sh` moves your local state into the bucket, uploads `terraform.tfvars`, and creates the
+GitHub login. `IMAGE` is only needed until the Build workflow has pushed an image tagged `latest`; use the
+image the job runs now (`gcloud run jobs describe travel-plan --region europe-north1`). Then copy the
+`github_variables` output into the repository's variables:
+
+```bash
+cd infra && tofu output -json github_variables | jq -r 'to_entries[] | "\(.key) \(.value)"' |
+  while read -r name value; do gh variable set "$name" --body "$value"; done
+```
+
+### Day to day
+
+- **Code changed?** Push to `master`. CI, Build and Deploy run one after another.
+- **Settings changed** (`terraform.tfvars`)? Run `PROJECT_ID=<project-id> infra/deploy.sh` locally. It uploads
+  the file to the bucket and applies it. `infra/deploy.sh plan` only shows what would change.
 - **Key changed?** Run `infra/set-secrets.sh` again. The job picks up the newest key on its next run.
 - **Run it now:** `gcloud run jobs execute travel-plan --region europe-north1`. `tofu output logs` shows where
   to read its output.
-- **Remove everything:** `tofu destroy`. The secrets made by the script stay; delete them in Secret Manager.
+- **Remove everything:** `tofu destroy`. The secrets and the state bucket stay; delete them by hand.
 
-API keys never go through OpenTofu, so they are not in `terraform.tfvars` or the state file. The state file
-lives in `infra/` on your machine and is git-ignored.
+API keys never go through OpenTofu, so they are not in `terraform.tfvars`, the bucket or the state file.
+The deploy account GitHub uses can change IAM in the project, so it is limited to `master` of this repo.
 
 ## Development
 

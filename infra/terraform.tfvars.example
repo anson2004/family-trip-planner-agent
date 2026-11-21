@@ -1,5 +1,7 @@
 # Copy to terraform.tfvars (git-ignored) and fill in. API keys do NOT go here: run set-secrets.sh.
-project_id = "travel-plan-agent-123456"
+# deploy.sh uploads it to the state bucket, where GitHub Actions reads it.
+project_id  = "travel-plan-agent-123456"
+github_repo = "anson2004/family-trip-planner-agent"
 
 # Optional (defaults shown)
 # region           = "europe-north1"
@@ -10,8 +12,8 @@ project_id = "travel-plan-agent-123456"
 
 # Everything from your .env except the API keys. Same names and values.
 settings = {
-  TRIP_FROM          = "Tampere"
-  TRIP_TO            = "Gran Canaria"
+  TRIP_FROM = "Tampere"
+  TRIP_TO   = "Gran Canaria"
   # No TRIP_DEPART / TRIP_RETURN: each run searches from tomorrow to 2 months later.
   TRIP_DAYS          = "7"
   TRIP_BUDGET        = "2000-3500"

@@ -17,11 +17,12 @@ provider "google" {
 resource "google_project_service" "apis" {
   for_each = toset([
     "artifactregistry.googleapis.com",
-    "cloudbuild.googleapis.com",
     "cloudscheduler.googleapis.com",
     "iam.googleapis.com",
+    "iamcredentials.googleapis.com", # GitHub Actions login
     "run.googleapis.com",
     "secretmanager.googleapis.com",
+    "sts.googleapis.com", # GitHub Actions login
   ])
   service            = each.value
   disable_on_destroy = false

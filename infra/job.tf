@@ -32,7 +32,7 @@ resource "google_cloud_run_v2_job" "planner" {
       max_retries = 0
 
       containers {
-        image = terraform_data.image.output
+        image = var.image
         resources {
           limits = {
             cpu    = "1"

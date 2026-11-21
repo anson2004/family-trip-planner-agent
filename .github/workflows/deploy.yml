@@ -1,0 +1,46 @@
+name: Deploy
+
+# Runs `tofu apply` with the newest image, after the Build workflow succeeded on master.
+# Run it by hand (Actions -> Deploy -> Run workflow) after changing only the config in the bucket.
+on:
+  workflow_run:
+    workflows: [Build]
+    types: [completed]
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write # log in to Google Cloud without a stored key
+
+concurrency:
+  group: deploy # never two applies at once on the same state
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOY_SA }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - uses: opentofu/setup-opentofu@v1
+        with:
+          tofu_version: 1.13.9
+          tofu_wrapper: false
+
+      - name: Deploy
+        run: infra/deploy.sh
+        env:
+          PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+          REGION: ${{ vars.GCP_REGION }}
