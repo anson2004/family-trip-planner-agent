@@ -68,24 +68,6 @@ The LLM never writes prices. Each result gets an ID, the agent returns the IDs i
 SerpApi results are cached in `~/.cache/travel-plan-agent` for 12 hours, so re-running costs nothing.
 `MAX_SERPAPI_CALLS` caps the live searches per plan (default 4 + 2 per destination, +1 per destination with `TRIP_DAYS`).
 
-## Run it weekly on Google Cloud
-
-`infra/` (OpenTofu) runs the planner as a Cloud Run Job every Monday at 08:00 Helsinki time and emails
-the plan. Pushing to `master` deploys it: CI → Build (image) → Deploy (`tofu apply`).
-
-One-time setup, from your Mac:
-
-```bash
-infra/set-secrets.sh <project-id>        # API keys from .env -> Secret Manager
-cp infra/terraform.tfvars.example infra/terraform.tfvars   # project, repo, trip settings
-infra/bootstrap-state.sh <project-id>    # bucket for the OpenTofu state and terraform.tfvars
-IMAGE=<image> PROJECT_ID=<project-id> infra/deploy.sh      # IMAGE only until Build has pushed one
-```
-
-Then add the `tofu output github_variables` values as GitHub repository variables.
-
-Settings changed? `PROJECT_ID=<project-id> infra/deploy.sh`. Run now: `gcloud run jobs execute travel-plan --region europe-north1`.
-
 ## Development
 
 ```bash
