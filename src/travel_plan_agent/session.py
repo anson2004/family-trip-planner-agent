@@ -102,9 +102,14 @@ class TripSession:
             seen.add((flight.id, hotel.id))
             packages.append(self.price(flight, hotel, pick.why))
 
-        # Packages within budget first, then cheaper ones, then over budget. Otherwise keep the agent's order.
-        order = {BudgetStatus.WITHIN: 0, BudgetStatus.UNDER: 1, BudgetStatus.OVER: 2}
-        packages.sort(key=lambda p: order[p.budget_status])
+        # Cheaper is better: cheapest first, with packages over the budget maximum last.
+        packages.sort(key=lambda p: (p.budget_status is BudgetStatus.OVER, p.total))
+        warnings += [
+            f"{p.hotel.name} is a hostel: its price may be for one bed, so check it covers all "
+            f"{self.request.travellers} travellers."
+            for p in packages
+            if p.hotel.kind == "hostel"
+        ]
 
         deals = [
             AgencyDeal(result=self.web[d.result_id], quoted_price=d.quoted_price, why=d.why)

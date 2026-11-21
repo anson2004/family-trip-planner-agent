@@ -60,6 +60,30 @@ def _hotel_line(opt: HotelOption) -> str:
     return " | ".join(parts)
 
 
+def _web_search(session: TripSession, tavily: TavilyClient, query: str, agencies_only: bool) -> str:
+    session.log(f"Web search: {query}")
+    try:
+        results = session.add_web(tavily.search(query, agencies_only, id_prefix="W"))
+    except Exception as exc:  # network or API errors should not stop the plan
+        return f"Web search failed: {exc}"
+    if not results:
+        return "No results."
+    return "\n\n".join(f"{r.id} | {r.title}\n{r.url}\n{r.snippet}" for r in results)
+
+
+def search_agency_packages(session: TripSession, tavily: TavilyClient) -> str:
+    """Search Finnish tour operators' package holidays for each destination, before the agent starts.
+
+    Done in code, not left to the LLM, because the model often skips this step."""
+    request = session.request
+    home = request.origins[0].strip().title()
+    sections = []
+    for destination in request.destinations:
+        query = f"{destination} family package holiday from {home} {request.depart:%B %Y}"
+        sections.append(f"Search: {query}\n{_web_search(session, tavily, query, agencies_only=True)}")
+    return "\n\n".join(sections)
+
+
 def build_tools(session: TripSession, serpapi: SerpApiClient, tavily: TavilyClient | None) -> list[BaseTool]:
     """The agent's tools. The live-search cap is `serpapi.max_live_calls`; cached repeats are always free."""
     request = session.request
@@ -230,14 +254,7 @@ def build_tools(session: TripSession, serpapi: SerpApiClient, tavily: TavilyClie
         """
         if tavily is None:
             return "Web search is not set up (no TAVILY_API_KEY)."
-        session.log(f"Web search: {query}")
-        try:
-            results = session.add_web(tavily.search(query, finnish_agencies_only, id_prefix="W"))
-        except Exception as exc:  # network or API errors should not stop the plan
-            return f"Web search failed: {exc}"
-        if not results:
-            return "No results."
-        return "\n\n".join(f"{r.id} | {r.title}\n{r.url}\n{r.snippet}" for r in results)
+        return _web_search(session, tavily, query, finnish_agencies_only)
 
     tools: list[BaseTool] = [search_flights, search_hotels, search_travel_agencies]
     if request.flexible:

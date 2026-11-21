@@ -37,7 +37,8 @@ def _link(url: str | None, label: str) -> str:
 def build_email(plan: TravelPlan) -> EmailContent:
     r, cur = plan.request, plan.request.currency
     title = f"{r.origin_label} → {r.destination_label}, {r.dates_label()}"
-    best = next((p for p in plan.packages if p.budget_status is BudgetStatus.WITHIN), None)
+    affordable = [p for p in plan.packages if p.budget_status is not BudgetStatus.OVER]
+    best = min(affordable, key=lambda p: p.total, default=None)
     subject = f"Trip plan: {title}" + (f" · from {best.total:.0f} {cur}" if best else "")
     trip_line = f"{r.party_label()} · {r.nights} nights · budget {r.budget_min:.0f}–{r.budget_max:.0f} {cur}"
     notes = [*plan.warnings, "Prices come from Google Flights/Hotels and change often. Check them before booking."]

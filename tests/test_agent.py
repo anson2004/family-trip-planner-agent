@@ -1,5 +1,6 @@
 """Runs the whole LangChain agent loop with a scripted fake LLM and mocked HTTP. No API keys needed."""
 
+import json
 from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any
@@ -95,7 +96,7 @@ def test_agent_end_to_end(tmp_path: Path) -> None:
         return httpx.Response(200, json=load("flights.json" if engine == "google_flights" else "hotels.json"))
 
     respx.get(SERPAPI_URL).mock(side_effect=serpapi)
-    respx.post(TAVILY_URL).mock(
+    tavily = respx.post(TAVILY_URL).mock(
         return_value=httpx.Response(
             200,
             json={"results": [{"title": "Tjäreborg Gran Canaria", "url": "https://tjareborg.fi/gc", "content": "x"}]},
@@ -108,17 +109,21 @@ def test_agent_end_to_end(tmp_path: Path) -> None:
 
     plan = plan_trip(make_request(), settings, log=log, model=model)
 
-    assert [p.why for p in plan.packages] == ["family resort, from Tampere", "cheapest"]
-    best = plan.packages[0]
+    assert [p.why for p in plan.packages] == ["cheapest", "family resort, from Tampere"]  # cheapest first
+    best = plan.packages[1]
     assert best.total == 2500 and best.budget_status is BudgetStatus.WITHIN and best.ground_transfer == 0
-    assert plan.packages[1].ground_transfer == 150  # HEL flight from Tampere: 3 x 50
+    assert plan.packages[0].ground_transfer == 150  # HEL flight from Tampere: 3 x 50
     assert plan.agency_deals[0].result.url == "https://tjareborg.fi/gc"
     u = plan.usage
-    assert (u.serpapi_searches, u.tavily_searches, u.llm_calls) == (2, 1, 5)  # 4 agent steps + 1 conversion
+    # Tavily: the package search the system runs up front, plus the one the scripted agent asked for.
+    assert (u.serpapi_searches, u.tavily_searches, u.llm_calls) == (2, 2, 5)  # 4 agent steps + 1 conversion
+    first_query = json.loads(tavily.calls[0].request.content)["query"]
+    assert first_query == "Gran Canaria family package holiday from Tampere February 2027"
+    assert logs[0] == f"Web search: {first_query}"
     assert (u.input_tokens, u.output_tokens, u.total_tokens) == (15000, 250, 15250)
     assert model.conversions == 1
     assert any("with F1 (TMP): 2500 total, within budget" in r for r in model.seen_tool_results)
-    assert logs[0] == "Flights TMP,HEL -> LPA (2027-02-14)"
+    assert logs[1] == "Flights TMP,HEL -> LPA (2027-02-14)"
     assert [c.input_tokens for c in u.calls] == [1000, 2000, 3000, 4000, 5000]
     assert u.calls[0].action == "search_flights(departure_airports=['TMP', 'HEL'], arrival_airports=['LPA'])"
     assert u.calls[-2].action == "final recommendation (text)"
@@ -198,7 +203,7 @@ def test_retries_when_groq_cannot_read_the_reply(tmp_path: Path, no_sleep: None,
     model = FlakyFinalModel(script=SCRIPT, fail_times=1, error_code=code)
     plan = plan_trip(make_request(), settings, model=model)
     assert model.final_attempts == 2 and model.conversions == 1
-    assert [p.why for p in plan.packages] == ["family resort, from Tampere", "cheapest"]
+    assert [p.why for p in plan.packages] == ["cheapest", "family resort, from Tampere"]
 
 
 @respx.mock
@@ -212,7 +217,7 @@ def test_uses_failed_generation_when_retries_fail(tmp_path: Path, no_sleep: None
     assert model.final_attempts == 3  # first try + 2 retries
     assert model.conversions == 1
     assert "Model reply was malformed; using its text" in logs
-    assert len(plan.packages) == 2 and plan.packages[0].total == 2500  # priced from the saved search results
+    assert [p.total for p in plan.packages] == [1880, 2500]  # priced from the saved search results
     assert plan.usage.serpapi_searches == 2  # nothing was searched again
 
 

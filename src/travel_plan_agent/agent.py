@@ -17,11 +17,12 @@ from travel_plan_agent.origins import resolve_origins
 from travel_plan_agent.providers.serpapi import SerpApiClient
 from travel_plan_agent.providers.tavily import TavilyClient
 from travel_plan_agent.session import TripSession
-from travel_plan_agent.tools import build_tools
+from travel_plan_agent.tools import build_tools, search_agency_packages
 
 SYSTEM_PROMPT = """\
 You are a family holiday planner for travellers leaving from Finland.
-Find the best flight + accommodation combinations within the budget, using only the tools.
+Find the cheapest good flight + accommodation combinations, using only the tools.
+Cheaper is better: the budget maximum is a ceiling, not a target, and going under the minimum is fine.
 
 Trip (fixed, the tools already apply it):
 - From: {origin_label}. Departure airports in order of preference: {airports}. {transfer_text}
@@ -40,15 +41,16 @@ How to work:
    departure airport when it is clearly cheaper overall, including the ground transfer.
    Explain that choice in origin_note.
 4. Search hotels for each destination that has reasonable flights (one search per destination),
-   in the area served by the best flights' arrival airport there, and pass that airport as
-   near_airports so the results show package totals with matching flights. Prefer family-friendly
-   places (pool, apartment/kitchen, beach). Room left for the hotel is roughly the budget maximum
-   minus the flight price. Use max_price_per_night to stay within it.
-5. Call search_travel_agencies once for package holidays from Finnish tour operators. Packages are
-   often good value for families. Only mention a price that appears in the result text.
-6. Hotel results already show exact package totals with the cheapest flights. Never do the sums
+   in a resort area served by the best flights' arrival airport there (e.g. "Maspalomas, Gran Canaria",
+   not just the island), and pass that airport as near_airports so the results show package totals
+   with matching flights. Prefer family-friendly places (pool, apartment/kitchen, beach).
+   Room left for the stay is at most the budget maximum minus the flight price: use
+   max_price_per_night to stay under it, and sort_by "price" for the cheapest stays.
+   Hostel prices may be for one bed, not the whole party; the system adds a warning when you pick one.
+{agency_step}6. Hotel results already show exact package totals with the cheapest flights. Never do the sums
    yourself; the final totals are calculated by the system from the IDs you return.
-7. Return 2-5 packages, best first, within budget wherever possible. Each flight must land near its hotel.
+7. Return 2-5 packages, cheapest first, under the budget maximum wherever possible.
+   Each flight must land near its hotel.
    {compare_text}
    Use only IDs the tools returned. Never invent prices, hotels or flights.
    You have {max_calls} flight/hotel searches in total, so plan them carefully.
@@ -57,10 +59,10 @@ How to work:
    airport you recommend and why, a short summary, and warnings.
 Add a warning when something is uncertain (for example, flight prices change quickly, or the
 child's ticket or bed rules need checking).
-"""
+{agency_results}"""
 
 
-def _system_prompt(request: TripRequest, session: TripSession, max_calls: int) -> str:
+def _system_prompt(request: TripRequest, session: TripSession, max_calls: int, agency_results: str | None) -> str:
     origin = session.origin
     transfers = [
         f"Flying from {a} adds {origin.transfer_per_person[a]:.0f} {request.currency} per traveller "
@@ -90,6 +92,17 @@ def _system_prompt(request: TripRequest, session: TripSession, max_calls: int) -
         )
     else:
         compare_text = ""
+    if agency_results is None:
+        agency_step = "5. Travel-agency search is not set up; skip package holidays from tour operators.\n"
+        agency_text = ""
+    else:
+        agency_step = (
+            "5. Package holidays from Finnish tour operators were already searched (results at the end).\n"
+            "   Packages are often good value for families: recommend good ones as agency deals by W ID.\n"
+            "   Only mention a price that appears in the result text. Call search_travel_agencies only\n"
+            "   for a clearly different query.\n"
+        )
+        agency_text = f"\nPackage holidays already found (W IDs):\n{agency_results}\n"
     extra = []
     if request.max_stops is not None:
         extra.append(f"- At most {request.max_stops} stop(s) each way.")
@@ -111,6 +124,8 @@ def _system_prompt(request: TripRequest, session: TripSession, max_calls: int) -
         currency=request.currency,
         extra="\n".join(extra) + ("\n" if extra else ""),
         max_calls=max_calls,
+        agency_step=agency_step,
+        agency_results=agency_text,
     )
 
 
@@ -147,7 +162,8 @@ def plan_trip(
     # The agent researches with tools and finishes with a written recommendation. It is not forced
     # to answer through a tool: gpt-oss on Groq often breaks forced tool calls at the final step
     # ("tool_use_failed" / "output_parse_failed"). A separate small call turns the text into a plan.
-    system_prompt = _system_prompt(request, session, max_calls)
+    agency_results = search_agency_packages(session, tavily) if tavily else None
+    system_prompt = _system_prompt(request, session, max_calls, agency_results)
     agent: Any = create_agent(
         model,
         tools=build_tools(session, serpapi, tavily),

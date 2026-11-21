@@ -250,7 +250,7 @@ def parse_hotels(
                 check_out=dates[1],
                 name=prop.get("name", "?"),
                 location_query=location,
-                kind=prop.get("type", "hotel"),
+                kind="hostel" if _is_hostel(prop) else prop.get("type", "hotel"),
                 total_price=float(total),
                 price_per_night=float(per_night) if per_night is not None else None,
                 currency=currency,
@@ -263,6 +263,16 @@ def parse_hotels(
             )
         )
     return options
+
+
+# Hostels often list the price of one bed, not a room for the party. They're kept (cheap is good)
+# but marked, so the plan can warn that the total may be too low.
+_HOSTEL_WORDS = ("hostel", "dorm", "capsule")
+
+
+def _is_hostel(prop: dict[str, Any]) -> bool:
+    text = f"{prop.get('name', '')} {prop.get('type', '')}".lower()
+    return any(word in text for word in _HOSTEL_WORDS)
 
 
 def parse_calendar(data: dict[str, Any]) -> list[DatePrice]:

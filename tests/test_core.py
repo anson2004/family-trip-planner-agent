@@ -186,7 +186,7 @@ def test_session_prices_and_builds_plan() -> None:
         agency_deals=[AgencyPick(result_id="W1", why="package"), AgencyPick(result_id="W7", why="made up")],
     )
     plan = session.build_plan(draft, Usage(llm_model="test"))
-    assert [p.why for p in plan.packages] == ["best", "cheap"]  # within budget sorted first
+    assert [p.why for p in plan.packages] == ["cheap", "best"]  # cheapest first
     assert len(plan.agency_deals) == 1
     assert any("F9" in w for w in plan.warnings)
 
@@ -202,3 +202,22 @@ def test_cli_uses_env_vars_without_an_env_file(tmp_path: Path, monkeypatch: pyte
     assert _pick_env_file(None) == Path(".env")
     with pytest.raises(typer.Exit):
         _pick_env_file(tmp_path / "missing.env")  # a file asked for by name must exist
+
+
+def test_hostels_are_kept_but_marked() -> None:
+    data = load("hotels.json")
+    data["properties"].append({"type": "hotel", "name": "Jungle House Hostel", "total_rate": {"extracted_lowest": 210}})
+    hotels = parse_hotels(data, "Gran Canaria", "EUR", "H", DATES)
+    assert [h.kind for h in hotels] == ["hotel", "vacation rental", "hostel"]  # kept, but marked
+
+
+def test_hostel_package_gets_a_warning() -> None:
+    session = TripSession(request=make_request(), origin=resolve_origin("Tampere"))
+    session.add_flights(parse_flights(load("flights.json"), "EUR", "x", DATES))
+    data = load("hotels.json")
+    data["properties"] = [{"type": "hotel", "name": "Jungle House Hostel", "total_rate": {"extracted_lowest": 210}}]
+    session.add_hotels(parse_hotels(data, "Gran Canaria", "EUR", "x", DATES))
+    draft = PlanDraft(summary="s", origin_note="o", packages=[PackagePick(flight_id="F1", hotel_id="H1", why="cheap")])
+    plan = session.build_plan(draft, Usage(llm_model="t"))
+    assert plan.packages[0].total == 1450 + 210  # kept: cheap is good
+    assert "Jungle House Hostel is a hostel: its price may be for one bed" in plan.warnings[0]
