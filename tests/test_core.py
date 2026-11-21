@@ -219,5 +219,19 @@ def test_hostel_package_gets_a_warning() -> None:
     session.add_hotels(parse_hotels(data, "Gran Canaria", "EUR", "x", DATES))
     draft = PlanDraft(summary="s", origin_note="o", packages=[PackagePick(flight_id="F1", hotel_id="H1", why="cheap")])
     plan = session.build_plan(draft, Usage(llm_model="t"))
-    assert plan.packages[0].total == 1450 + 210  # kept: cheap is good
-    assert "Jungle House Hostel is a hostel: its price may be for one bed" in plan.warnings[0]
+    assert 1450 + 210 in [p.total for p in plan.packages]  # kept: cheap is good
+    hostel_warnings = [w for w in plan.warnings if "Jungle House Hostel is a hostel" in w]
+    assert len(hostel_warnings) == 1  # once per hostel, even when the top-up reuses it
+
+
+def test_dates_default_to_a_rolling_two_month_window(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from travel_plan_agent.config import add_months
+
+    for name in ("TRIP_DEPART", "TRIP_RETURN", "TRIP_DAYS"):
+        monkeypatch.delenv(name, raising=False)
+    env = tmp_path / ".env"
+    env.write_text("TRIP_TO=Gran Canaria\nTRIP_DEPART=\nTRIP_RETURN=\nTRIP_BUDGET=3000\n")
+    r = TripSettings(_env_file=env).to_request(today=date(2026, 12, 30))
+    assert (r.depart, r.return_date, r.trip_days) == (date(2026, 12, 31), date(2027, 2, 28), 7)
+    assert r.flexible and r.latest_departure == date(2027, 2, 21)
+    assert add_months(date(2027, 1, 31), 1) == date(2027, 2, 28)

@@ -20,6 +20,22 @@ from travel_plan_agent.models import (
 )
 from travel_plan_agent.origins import ResolvedOrigin
 
+MIN_PACKAGES = 2
+
+
+def _cheapest_first(p: PricedPackage) -> tuple[bool, float]:
+    """Cheaper is better: cheapest first, with packages over the budget maximum last."""
+    return p.budget_status is BudgetStatus.OVER, p.total
+
+
+def _mismatch(flight: FlightOption, hotel: HotelOption) -> str | None:
+    """Why this flight and stay can't be one package, or None when they fit."""
+    if flight.outbound_date != hotel.check_in or flight.return_date != hotel.check_out:
+        return f"the flight ({flight.outbound_date}) and the stay ({hotel.check_in}) are on different dates"
+    if hotel.near_airports and flight.arrival_airport not in hotel.near_airports:
+        return f"the flight lands at {flight.arrival_airport}, but the stay is near {', '.join(hotel.near_airports)}"
+    return None
+
 
 @dataclass
 class TripSession:
@@ -76,6 +92,13 @@ class TripSession:
             why=why,
         )
 
+    def _known_match(self, flight: FlightOption, hotel: HotelOption) -> bool:
+        """The flight and stay surely go together: same dates, and the flight lands near the stay."""
+        if _mismatch(flight, hotel):
+            return False
+        # Without near_airports, a stay can only be matched when there is a single destination.
+        return bool(hotel.near_airports) or len(self.request.destinations) == 1
+
     def build_plan(self, draft: PlanDraft, usage: Usage) -> TravelPlan:
         warnings = list(draft.warnings)
         packages: list[PricedPackage] = []
@@ -85,30 +108,35 @@ class TripSession:
             if flight is None or hotel is None:
                 warnings.append(f"Dropped a package with unknown IDs {pick.flight_id}/{pick.hotel_id}.")
                 continue
-            if flight.outbound_date != hotel.check_in or flight.return_date != hotel.check_out:
-                warnings.append(
-                    f"Dropped {flight.id}+{hotel.id}: the flight ({flight.outbound_date}) and the stay "
-                    f"({hotel.check_in}) are on different dates."
-                )
-                continue
-            if hotel.near_airports and flight.arrival_airport not in hotel.near_airports:
-                warnings.append(
-                    f"Dropped {flight.id}+{hotel.id}: the flight lands at {flight.arrival_airport}, but the stay "
-                    f"is near {', '.join(hotel.near_airports)}."
-                )
+            problem = _mismatch(flight, hotel)
+            if problem:
+                warnings.append(f"Dropped {flight.id}+{hotel.id}: {problem}.")
                 continue
             if (flight.id, hotel.id) in seen:
                 continue
             seen.add((flight.id, hotel.id))
             packages.append(self.price(flight, hotel, pick.why))
 
-        # Cheaper is better: cheapest first, with packages over the budget maximum last.
-        packages.sort(key=lambda p: (p.budget_status is BudgetStatus.OVER, p.total))
+        # The agent sometimes returns a single package. Top up with the next cheapest valid combinations.
+        missing = MIN_PACKAGES - len(packages)
+        if missing > 0:
+            extra = sorted(
+                (
+                    self.price(f, h, "Added by the system: the next cheapest combination found.")
+                    for f in self.flights.values()
+                    for h in self.hotels.values()
+                    if (f.id, h.id) not in seen and self._known_match(f, h)
+                ),
+                key=_cheapest_first,
+            )
+            packages += extra[:missing]
+
+        packages.sort(key=_cheapest_first)
+        hostels = dict.fromkeys(p.hotel.name for p in packages if p.hotel.kind == "hostel")
         warnings += [
-            f"{p.hotel.name} is a hostel: its price may be for one bed, so check it covers all "
+            f"{name} is a hostel: its price may be for one bed, so check it covers all "
             f"{self.request.travellers} travellers."
-            for p in packages
-            if p.hotel.kind == "hostel"
+            for name in hostels
         ]
 
         deals = [

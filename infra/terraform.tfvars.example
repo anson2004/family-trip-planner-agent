@@ -12,8 +12,7 @@ project_id = "travel-plan-agent-123456"
 settings = {
   TRIP_FROM          = "Tampere"
   TRIP_TO            = "Gran Canaria"
-  TRIP_DEPART        = "2027-02-14"
-  TRIP_RETURN        = "2027-02-28"
+  # No TRIP_DEPART / TRIP_RETURN: each run searches from tomorrow to 2 months later.
   TRIP_DAYS          = "7"
   TRIP_BUDGET        = "2000-3500"
   TRIP_ADULTS        = "2"

@@ -33,7 +33,7 @@ uv run travel-plan --env-file trips/turkey.env   # another trip file (needs the 
 | `TRIP_FROM` | `Tampere` or `Tampere,Turku` | Finnish city or airport code; comma-separate for several. The first is home (no transfer cost). HEL is added as a fallback with an estimated train cost (edit it in `src/travel_plan_agent/origins.py`) |
 | `TRIP_TO` | `Gran Canaria` or `Gran Canaria,Tenerife,Madeira` | City, island, region or country; up to 5 comma-separated are compared in one plan. The agent picks the airports |
 | `TRIP_TRANSFER_COSTS` | `TKU:40,HEL:50` | Optional return-trip ground cost per traveller to other departure airports |
-| `TRIP_DEPART`, `TRIP_RETURN` | `2027-02-14`, `2027-02-28` | YYYY-MM-DD. Exact dates, or the search window when `TRIP_DAYS` is set |
+| `TRIP_DEPART`, `TRIP_RETURN` | `2027-02-14`, `2027-02-28` | YYYY-MM-DD. Exact dates, or the search window when `TRIP_DAYS` is set. Empty = from tomorrow to 2 months later, with `TRIP_DAYS` 7 (handy for the weekly cloud job) |
 | `TRIP_DAYS` | `7` | Optional trip length in nights (7 = Saturday to Saturday). The agent checks the Google Flights price calendar and picks the cheapest dates in the window |
 | `TRIP_BUDGET` | `2000-3500` | Total EUR for flights + accommodation for everyone, or just a max like `3500` |
 | `TRIP_ADULTS` | `2` | |

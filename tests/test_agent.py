@@ -119,7 +119,7 @@ def test_agent_end_to_end(tmp_path: Path) -> None:
     assert (u.serpapi_searches, u.tavily_searches, u.llm_calls) == (2, 2, 5)  # 4 agent steps + 1 conversion
     first_query = json.loads(tavily.calls[0].request.content)["query"]
     assert first_query == "Gran Canaria family package holiday from Tampere February 2027"
-    assert logs[0] == f"Web search: {first_query}"
+    assert logs[0] == f"Web search: {first_query} (1 result(s))"
     assert (u.input_tokens, u.output_tokens, u.total_tokens) == (15000, 250, 15250)
     assert model.conversions == 1
     assert any("with F1 (TMP): 2500 total, within budget" in r for r in model.seen_tool_results)
@@ -278,7 +278,11 @@ def test_broken_search_call_is_not_used_as_the_answer(tmp_path: Path, no_sleep: 
     assert "Model reply was malformed; asking for its recommendation" in logs
     assert model.asked_again == 1 and model.conversions == 1
     # The conversion returns F2+H2, F1+H1 and W1, but the recommendation only named F1 + H1.
-    assert [p.why for p in plan.packages] == ["family resort, from Tampere"]
+    # Only one package was recommended, so the system adds the next cheapest one (cheaper, so it comes first).
+    assert [p.why for p in plan.packages] == [
+        "Added by the system: the next cheapest combination found.",
+        "family resort, from Tampere",
+    ]
     assert plan.agency_deals == []
     assert "Dropped F2+H2: not in the agent's recommendation." in plan.warnings
     actions = [c.action for c in plan.usage.calls]
@@ -317,5 +321,9 @@ def test_step_limit_asks_for_the_recommendation(tmp_path: Path) -> None:
     assert model.asked_again == 1
     last = model.history_before_ask[-1]
     assert not (isinstance(last, AIMessage) and last.tool_calls)  # no tool call left without its result
-    assert [p.why for p in plan.packages] == ["family resort, from Tampere"]
+    # Only one package was recommended, so the system adds the next cheapest one (cheaper, so it comes first).
+    assert [p.why for p in plan.packages] == [
+        "Added by the system: the next cheapest combination found.",
+        "family resort, from Tampere",
+    ]
     assert plan.usage.serpapi_searches == 3  # TMP+HEL, hotels, TMP only; the repeats came from the cache

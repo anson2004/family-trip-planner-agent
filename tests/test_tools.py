@@ -80,7 +80,8 @@ def test_hotels_are_priced_only_with_flights_landing_nearby(tmp_path: Path) -> N
         ],
     )
     plan = session.build_plan(draft, Usage(llm_model="t"))
-    assert [p.hotel.id for p in plan.packages] == ["H5"]
+    ids = [p.hotel.id for p in plan.packages]
+    assert "H3" not in ids and "H5" in ids  # the top-up also only uses stays near LPA
     assert "lands at LPA, but the stay is near TFS" in plan.warnings[0]
 
 

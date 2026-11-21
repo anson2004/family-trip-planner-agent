@@ -61,11 +61,12 @@ def _hotel_line(opt: HotelOption) -> str:
 
 
 def _web_search(session: TripSession, tavily: TavilyClient, query: str, agencies_only: bool) -> str:
-    session.log(f"Web search: {query}")
     try:
         results = session.add_web(tavily.search(query, agencies_only, id_prefix="W"))
     except Exception as exc:  # network or API errors should not stop the plan
+        session.log(f"Web search: {query} (failed: {exc})")
         return f"Web search failed: {exc}"
+    session.log(f"Web search: {query} ({len(results)} result(s))")
     if not results:
         return "No results."
     return "\n\n".join(f"{r.id} | {r.title}\n{r.url}\n{r.snippet}" for r in results)

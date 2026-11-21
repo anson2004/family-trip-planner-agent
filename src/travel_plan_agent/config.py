@@ -1,4 +1,5 @@
-from datetime import date
+import calendar
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -62,6 +63,17 @@ def parse_budget(value: str) -> tuple[float, float]:
     raise ValueError("use a maximum like 3000 or a range like 2000-3500")
 
 
+ROLLING_MONTHS = 2
+DEFAULT_TRIP_DAYS = 7
+
+
+def add_months(day: date, months: int) -> date:
+    """Same day `months` later, or the month's last day (31 Jan + 1 month = 28/29 Feb)."""
+    month_index = day.month - 1 + months
+    year, month = day.year + month_index // 12, month_index % 12 + 1
+    return date(year, month, min(day.day, calendar.monthrange(year, month)[1]))
+
+
 class TripSettings(BaseSettings):
     """The trip to plan, read from TRIP_* environment variables or a .env file."""
 
@@ -72,9 +84,11 @@ class TripSettings(BaseSettings):
     transfer_costs: Annotated[dict[str, float], NoDecode] = Field(
         default_factory=dict, validation_alias="TRIP_TRANSFER_COSTS"
     )
-    depart: date = Field(validation_alias="TRIP_DEPART")
-    return_date: date = Field(validation_alias="TRIP_RETURN")
+    # Empty = a rolling window: leave from tomorrow, be back within 2 months (good for a weekly job).
+    depart: date | None = Field(default=None, validation_alias="TRIP_DEPART")
+    return_date: date | None = Field(default=None, validation_alias="TRIP_RETURN")
     # Optional trip length. When set, TRIP_DEPART/TRIP_RETURN are the search window.
+    # Defaults to 7 when the dates are left empty.
     trip_days: int | None = Field(default=None, validation_alias="TRIP_DAYS")
     budget: str = Field(validation_alias="TRIP_BUDGET")
     adults: int = Field(default=2, validation_alias="TRIP_ADULTS")
@@ -117,15 +131,21 @@ class TripSettings(BaseSettings):
         parse_budget(value)
         return value
 
-    def to_request(self) -> TripRequest:
+    def to_request(self, today: date | None = None) -> TripRequest:
         budget_min, budget_max = parse_budget(self.budget)
+        today = today or date.today()
+        depart = self.depart or today + timedelta(days=1)
+        return_date = self.return_date or add_months(depart, ROLLING_MONTHS)
+        trip_days = self.trip_days
+        if trip_days is None and (self.depart is None or self.return_date is None):
+            trip_days = DEFAULT_TRIP_DAYS  # an open window needs a trip length
         return TripRequest(
             origins=self.origins,
             destinations=self.destinations,
             transfer_costs=self.transfer_costs,
-            depart=self.depart,
-            return_date=self.return_date,
-            trip_days=self.trip_days,
+            depart=depart,
+            return_date=return_date,
+            trip_days=trip_days,
             budget_min=budget_min,
             budget_max=budget_max,
             adults=self.adults,
