@@ -49,7 +49,8 @@ How to work:
    Hostel prices may be for one bed, not the whole party; the system adds a warning when you pick one.
 {agency_step}6. Hotel results already show exact package totals with the cheapest flights. Never do the sums
    yourself; the final totals are calculated by the system from the IDs you return.
-7. Return 2-5 packages, cheapest first, under the budget maximum wherever possible.
+7. Return 3-6 packages, cheapest first, under the budget maximum wherever possible. Use different
+   stays where you can: cheap ones with a lower rating are welcome next to better-rated ones.
    Each flight must land near its hotel.
    {compare_text}
    Use only IDs the tools returned. Never invent prices, hotels or flights.

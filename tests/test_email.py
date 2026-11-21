@@ -39,7 +39,8 @@ def test_build_email() -> None:
     assert "pool &lt;and&gt; kids&#x27; club" in email.html and "<and>" not in email.html
     assert "Tjäreborg &lt;Gran Canaria&gt;" in email.html
     assert 'href="https://hotel.example/fbr"' in email.html
-    assert "1. 1880 EUR (under budget)" in email.text and "2. 2500 EUR (within budget)" in email.text
+    assert "1. 1880 EUR (under budget)" in email.text and "4. 2500 EUR (within budget)" in email.text
+    assert "<b>Travellers:</b> 2 adults + 1 child (age 6)" in email.html and "Travellers: 2 adults" in email.text
     assert "+ 150 transfer" in email.text  # HEL flight from Tampere
     assert "Hotel: https://hotel.example/fbr" in email.text
 

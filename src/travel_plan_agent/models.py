@@ -86,7 +86,8 @@ class TripRequest(BaseModel):
         label = f"{self.adults} adult{'s' if self.adults != 1 else ''}"
         if self.children_ages:
             ages = ", ".join(str(a) for a in self.children_ages)
-            label += f" + {len(self.children_ages)} child{'ren' if len(self.children_ages) != 1 else ''} (age {ages})"
+            many = len(self.children_ages) != 1
+            label += f" + {len(self.children_ages)} child{'ren' if many else ''} (age{'s' if many else ''} {ages})"
         return label
 
 

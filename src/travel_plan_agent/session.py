@@ -20,7 +20,7 @@ from travel_plan_agent.models import (
 )
 from travel_plan_agent.origins import ResolvedOrigin
 
-MIN_PACKAGES = 2
+MIN_PACKAGES = 5  # the agent often returns only 1-2; the system tops up to this many
 
 
 def _cheapest_first(p: PricedPackage) -> tuple[bool, float]:
@@ -117,7 +117,7 @@ class TripSession:
             seen.add((flight.id, hotel.id))
             packages.append(self.price(flight, hotel, pick.why))
 
-        # The agent sometimes returns a single package. Top up with the next cheapest valid combinations.
+        # Top up with the next cheapest valid combinations, so there is always a choice.
         missing = MIN_PACKAGES - len(packages)
         if missing > 0:
             extra = sorted(
@@ -129,7 +129,14 @@ class TripSession:
                 ),
                 key=_cheapest_first,
             )
-            packages += extra[:missing]
+            # Different stays first (the cheapest package for each), so the options aren't all the same hotel.
+            used = {p.hotel.id for p in packages}
+            new_stays: list[PricedPackage] = []
+            same_stays: list[PricedPackage] = []
+            for p in extra:
+                (same_stays if p.hotel.id in used else new_stays).append(p)
+                used.add(p.hotel.id)
+            packages += (new_stays + same_stays)[:missing]
 
         packages.sort(key=_cheapest_first)
         hostels = dict.fromkeys(p.hotel.name for p in packages if p.hotel.kind == "hostel")

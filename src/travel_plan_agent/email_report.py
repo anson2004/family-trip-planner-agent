@@ -40,7 +40,8 @@ def build_email(plan: TravelPlan) -> EmailContent:
     affordable = [p for p in plan.packages if p.budget_status is not BudgetStatus.OVER]
     best = min(affordable, key=lambda p: p.total, default=None)
     subject = f"Trip plan: {title}" + (f" · from {best.total:.0f} {cur}" if best else "")
-    trip_line = f"{r.party_label()} · {r.nights} nights · budget {r.budget_min:.0f}–{r.budget_max:.0f} {cur}"
+    travellers = r.party_label()
+    trip_line = f"{r.nights} nights · budget {r.budget_min:.0f}–{r.budget_max:.0f} {cur}"
     notes = [*plan.warnings, "Prices come from Google Flights/Hotels and change often. Check them before booking."]
 
     # ---- HTML ----
@@ -83,6 +84,7 @@ def build_email(plan: TravelPlan) -> EmailContent:
 <div style="font-family:-apple-system,Segoe UI,Roboto,sans-serif;color:#1f2328;max-width:900px">
   <h2 style="margin-bottom:4px">{escape(title)}</h2>
   <p style="margin-top:0;color:#59636e">{escape(trip_line)}</p>
+  <p><b>Travellers:</b> {escape(travellers)}</p>
   <p>{escape(plan.summary)}</p>
   <p><b>Departure airport:</b> {escape(plan.origin_note)}</p>
   <h3>Flight + hotel packages</h3>
@@ -95,7 +97,15 @@ def build_email(plan: TravelPlan) -> EmailContent:
 </div>"""
 
     # ---- Plain text ----
-    lines = [title, trip_line, "", plan.summary, f"Departure airport: {plan.origin_note}", ""]
+    lines = [
+        title,
+        trip_line,
+        f"Travellers: {travellers}",
+        "",
+        plan.summary,
+        f"Departure airport: {plan.origin_note}",
+        "",
+    ]
     for i, p in enumerate(plan.packages, start=1):
         f, h = p.flight, p.hotel
         lines += [
@@ -103,7 +113,9 @@ def build_email(plan: TravelPlan) -> EmailContent:
             f"{f.outbound_date:%a %d %b} - {f.return_date:%a %d %b}",
             f"   Flight: {f.departure_airport} -> {f.arrival_airport}, {_stops(p)}, {', '.join(f.airlines)}, "
             f"{f.price_total:.0f} {cur}" + (f" + {p.ground_transfer:.0f} transfer" if p.ground_transfer else ""),
-            f"   Stay:   {h.name}, {h.location_query}, {h.total_price:.0f} {cur} total",
+            f"   Stay:   {h.name}"
+            + (f", {h.rating}★ ({h.reviews or 0} reviews)" if h.rating else "")
+            + f", {h.location_query}, {h.total_price:.0f} {cur} total",
             f"   Why:    {p.why}",
         ]
         lines += [f"   {label}: {url}" for label, url in (("Flights", f.booking_url), ("Hotel", h.url)) if url]

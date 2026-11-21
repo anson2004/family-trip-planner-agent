@@ -23,6 +23,8 @@ from travel_plan_agent.models import BudgetStatus
 from travel_plan_agent.providers.serpapi import SERPAPI_URL
 from travel_plan_agent.providers.tavily import TAVILY_URL
 
+ADDED = "Added by the system: the next cheapest combination found."
+
 
 def call(name: str, args: dict[str, Any], i: int) -> AIMessage:
     return AIMessage(
@@ -109,8 +111,9 @@ def test_agent_end_to_end(tmp_path: Path) -> None:
 
     plan = plan_trip(make_request(), settings, log=log, model=model)
 
-    assert [p.why for p in plan.packages] == ["cheapest", "family resort, from Tampere"]  # cheapest first
-    best = plan.packages[1]
+    # Cheapest first; the system tops up with the other combinations so there is a choice.
+    assert [p.why for p in plan.packages] == ["cheapest", ADDED, ADDED, "family resort, from Tampere"]
+    best = plan.packages[-1]
     assert best.total == 2500 and best.budget_status is BudgetStatus.WITHIN and best.ground_transfer == 0
     assert plan.packages[0].ground_transfer == 150  # HEL flight from Tampere: 3 x 50
     assert plan.agency_deals[0].result.url == "https://tjareborg.fi/gc"
@@ -203,7 +206,7 @@ def test_retries_when_groq_cannot_read_the_reply(tmp_path: Path, no_sleep: None,
     model = FlakyFinalModel(script=SCRIPT, fail_times=1, error_code=code)
     plan = plan_trip(make_request(), settings, model=model)
     assert model.final_attempts == 2 and model.conversions == 1
-    assert [p.why for p in plan.packages] == ["cheapest", "family resort, from Tampere"]
+    assert [p.why for p in plan.packages] == ["cheapest", ADDED, ADDED, "family resort, from Tampere"]
 
 
 @respx.mock
@@ -217,7 +220,7 @@ def test_uses_failed_generation_when_retries_fail(tmp_path: Path, no_sleep: None
     assert model.final_attempts == 3  # first try + 2 retries
     assert model.conversions == 1
     assert "Model reply was malformed; using its text" in logs
-    assert [p.total for p in plan.packages] == [1880, 2500]  # priced from the saved search results
+    assert [p.total for p in plan.packages] == [1880, 2080, 2300, 2500]  # priced from the saved search results
     assert plan.usage.serpapi_searches == 2  # nothing was searched again
 
 
@@ -278,11 +281,8 @@ def test_broken_search_call_is_not_used_as_the_answer(tmp_path: Path, no_sleep: 
     assert "Model reply was malformed; asking for its recommendation" in logs
     assert model.asked_again == 1 and model.conversions == 1
     # The conversion returns F2+H2, F1+H1 and W1, but the recommendation only named F1 + H1.
-    # Only one package was recommended, so the system adds the next cheapest one (cheaper, so it comes first).
-    assert [p.why for p in plan.packages] == [
-        "Added by the system: the next cheapest combination found.",
-        "family resort, from Tampere",
-    ]
+    # Only one package was recommended, so the system tops up with the other combinations.
+    assert [p.why for p in plan.packages] == [ADDED, ADDED, ADDED, "family resort, from Tampere"]
     assert plan.agency_deals == []
     assert "Dropped F2+H2: not in the agent's recommendation." in plan.warnings
     actions = [c.action for c in plan.usage.calls]
@@ -321,9 +321,6 @@ def test_step_limit_asks_for_the_recommendation(tmp_path: Path) -> None:
     assert model.asked_again == 1
     last = model.history_before_ask[-1]
     assert not (isinstance(last, AIMessage) and last.tool_calls)  # no tool call left without its result
-    # Only one package was recommended, so the system adds the next cheapest one (cheaper, so it comes first).
-    assert [p.why for p in plan.packages] == [
-        "Added by the system: the next cheapest combination found.",
-        "family resort, from Tampere",
-    ]
+    # Only one package was recommended, so the system tops up with the other combinations.
+    assert [p.why for p in plan.packages] == [ADDED, ADDED, ADDED, ADDED, "family resort, from Tampere"]
     assert plan.usage.serpapi_searches == 3  # TMP+HEL, hotels, TMP only; the repeats came from the cache

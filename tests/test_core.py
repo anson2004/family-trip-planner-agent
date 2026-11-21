@@ -48,6 +48,7 @@ def make_request(**overrides: Any) -> TripRequest:
 def test_request_validation() -> None:
     assert make_request().nights == 7
     assert make_request().party_label() == "2 adults + 1 child (age 6)"
+    assert make_request(children_ages=[6, 10]).party_label() == "2 adults + 2 children (ages 6, 10)"
     with pytest.raises(ValueError):
         make_request(return_date=date(2027, 2, 10))
     with pytest.raises(ValueError):
@@ -186,9 +187,21 @@ def test_session_prices_and_builds_plan() -> None:
         agency_deals=[AgencyPick(result_id="W1", why="package"), AgencyPick(result_id="W7", why="made up")],
     )
     plan = session.build_plan(draft, Usage(llm_model="test"))
-    assert [p.why for p in plan.packages] == ["cheap", "best"]  # cheapest first
+    added = "Added by the system: the next cheapest combination found."
+    assert [p.why for p in plan.packages] == ["cheap", added, added, "best"]  # cheapest first, topped up
     assert len(plan.agency_deals) == 1
     assert any("F9" in w for w in plan.warnings)
+
+
+def test_top_up_prefers_a_different_stay(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("travel_plan_agent.session.MIN_PACKAGES", 2)
+    session = TripSession(request=make_request(), origin=resolve_origin("Tampere"))
+    session.add_flights(parse_flights(load("flights.json"), "EUR", "x", DATES))
+    session.add_hotels(parse_hotels(load("hotels.json"), "Gran Canaria", "EUR", "x", DATES))
+    draft = PlanDraft(summary="s", origin_note="o", packages=[PackagePick(flight_id="F2", hotel_id="H2", why="cheap")])
+    plan = session.build_plan(draft, Usage(llm_model="test"))
+    # F1+H2 (2080) is cheaper, but F2+H1 (2300) adds a second stay to choose from.
+    assert [(p.flight.id, p.hotel.id) for p in plan.packages] == [("F2", "H2"), ("F2", "H1")]
 
 
 def test_cli_uses_env_vars_without_an_env_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
