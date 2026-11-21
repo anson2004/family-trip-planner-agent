@@ -1,0 +1,15 @@
+# What `gcloud builds submit` must NOT upload to Cloud Build. Keeps API keys (.env) and
+# OpenTofu state off Google's build bucket.
+.gcloudignore
+.git
+.github
+.venv
+.env
+*.env
+infra
+tests
+plan*.json
+**/__pycache__
+.mypy_cache
+.pytest_cache
+.ruff_cache

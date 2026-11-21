@@ -189,3 +189,16 @@ def test_session_prices_and_builds_plan() -> None:
     assert [p.why for p in plan.packages] == ["best", "cheap"]  # within budget sorted first
     assert len(plan.agency_deals) == 1
     assert any("F9" in w for w in plan.warnings)
+
+
+def test_cli_uses_env_vars_without_an_env_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import typer
+
+    from travel_plan_agent.cli import _pick_env_file
+
+    monkeypatch.chdir(tmp_path)
+    assert _pick_env_file(None) is None  # no .env here: environment variables only (Cloud Run)
+    (tmp_path / ".env").write_text("TRIP_TO=Gran Canaria\n")
+    assert _pick_env_file(None) == Path(".env")
+    with pytest.raises(typer.Exit):
+        _pick_env_file(tmp_path / "missing.env")  # a file asked for by name must exist

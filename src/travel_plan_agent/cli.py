@@ -20,20 +20,39 @@ console = Console()
 _STATUS_STYLE = {BudgetStatus.WITHIN: "green", BudgetStatus.UNDER: "cyan", BudgetStatus.OVER: "red"}
 
 
-def _load_settings[T: BaseSettings](cls: type[T], env_file: Path) -> T:
+def _load_settings[T: BaseSettings](cls: type[T], env_file: Path | None) -> T:
     try:
         return cls(_env_file=env_file)
     except ValidationError as exc:
         problems = "\n".join(f"  {str(e['loc'][0]).upper()}: {e['msg']}" for e in exc.errors())
-        console.print(f"[red]Fix these settings in {env_file} (see .env.example):\n{problems}[/red]")
+        console.print(f"[red]Fix these settings in {_source(env_file)} (see .env.example):\n{problems}[/red]")
         raise typer.Exit(1) from exc
+
+
+def _source(env_file: Path | None) -> str:
+    return str(env_file) if env_file else "the environment variables"
+
+
+def _pick_env_file(env_file: Path | None) -> Path | None:
+    """The settings file to read, or None to use environment variables only (e.g. in Cloud Run)."""
+    if env_file is not None:
+        if not env_file.exists():
+            console.print(f"[red]{env_file} not found.[/red]")
+            raise typer.Exit(1)
+        return env_file
+    default = Path(".env")
+    return default if default.exists() else None
 
 
 @app.command()
 def plan(
-    env_file: Annotated[Path, typer.Option("--env-file", help="Settings file with keys and TRIP_* values")] = Path(
-        ".env"
-    ),
+    env_file: Annotated[
+        Path | None,
+        typer.Option(
+            "--env-file",
+            help="Settings file with keys and TRIP_* values. Default: .env if it exists, else environment variables",
+        ),
+    ] = None,
     json_out: Annotated[Path | None, typer.Option("--json", help="Also save the plan as JSON to this file")] = None,
     quiet: Annotated[bool, typer.Option(help="Hide search progress")] = False,
     trace: Annotated[bool, typer.Option(help="Show every LLM call with its token count")] = False,
@@ -42,10 +61,8 @@ def plan(
         bool, typer.Option("--test-email", help="Only send a sample email to check Resend; no searches or LLM calls")
     ] = False,
 ) -> None:
-    """Plan the trip described by the TRIP_* settings in the env file."""
-    if not env_file.exists():
-        console.print(f"[red]{env_file} not found. Copy .env.example to .env and fill it in.[/red]")
-        raise typer.Exit(1)
+    """Plan the trip described by the TRIP_* settings in the env file or environment variables."""
+    env_file = _pick_env_file(env_file)
 
     # Imported here so `--help` stays fast.
     from travel_plan_agent.agent import plan_trip
@@ -54,7 +71,7 @@ def plan(
     settings = _load_settings(Settings, env_file)
     if test_email:
         if not settings.email_to or settings.resend_api_key is None:
-            console.print(f"[red]Set RESEND_API_KEY and EMAIL_TO in {env_file} first.[/red]")
+            console.print(f"[red]Set RESEND_API_KEY and EMAIL_TO in {_source(env_file)} first.[/red]")
             raise typer.Exit(1)
         from travel_plan_agent.email_report import sample_plan
 
@@ -65,7 +82,7 @@ def plan(
         request = trip.to_request()
     except ValidationError as exc:
         problems = "; ".join(e["msg"] for e in exc.errors())
-        console.print(f"[red]Invalid trip settings in {env_file}: {problems}[/red]")
+        console.print(f"[red]Invalid trip settings in {_source(env_file)}: {problems}[/red]")
         raise typer.Exit(1) from exc
 
     console.print(

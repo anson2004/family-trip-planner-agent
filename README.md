@@ -68,6 +68,41 @@ The LLM never writes prices. Each result gets an ID, the agent returns the IDs i
 SerpApi results are cached in `~/.cache/travel-plan-agent` for 12 hours, so re-running costs nothing.
 `MAX_SERPAPI_CALLS` caps the live searches per plan (default 4 + 2 per destination, +1 per destination with `TRIP_DAYS`).
 
+## Run it weekly on Google Cloud
+
+`infra/` deploys the planner as a Cloud Run Job that Cloud Scheduler starts every Monday at 08:00
+(Helsinki time); the plan arrives by email. At this size it stays inside Google Cloud's free tier.
+The app reads plain environment variables when there is no `.env` file, which is how the job gets
+its settings.
+
+You need a Google Cloud project with billing turned on (a budget alert is a good idea), plus:
+
+```bash
+brew install opentofu google-cloud-sdk
+gcloud init                              # log in and pick the project
+gcloud auth application-default login    # lets OpenTofu use your login
+```
+
+Deploy:
+
+```bash
+infra/set-secrets.sh <project-id>        # copies the API keys from .env into Secret Manager
+cp infra/terraform.tfvars.example infra/terraform.tfvars   # project id + TRIP_* settings, no keys
+cd infra
+tofu init
+tofu apply                               # builds the image with Cloud Build and creates everything
+```
+
+- **Code changed?** Run `tofu apply` again. It builds a new image only when `src/`, the Dockerfile or the lock
+  file changed.
+- **Key changed?** Run `infra/set-secrets.sh` again. The job picks up the newest key on its next run.
+- **Run it now:** `gcloud run jobs execute travel-plan --region europe-north1`. `tofu output logs` shows where
+  to read its output.
+- **Remove everything:** `tofu destroy`. The secrets made by the script stay; delete them in Secret Manager.
+
+API keys never go through OpenTofu, so they are not in `terraform.tfvars` or the state file. The state file
+lives in `infra/` on your machine and is git-ignored.
+
 ## Development
 
 ```bash

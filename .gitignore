@@ -6,3 +6,8 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 plan*.json
+# OpenTofu: local state and your own settings (project id, email, trip)
+infra/.terraform/
+infra/terraform.tfvars
+*.tfstate
+*.tfstate.*
