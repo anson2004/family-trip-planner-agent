@@ -9,7 +9,7 @@ output "logs" {
 }
 
 output "github_variables" {
-  description = "Repository variables for the Build and Deploy workflows (identifiers, not secrets)"
+  description = "Repository variables for the build and deploy jobs in pipeline.yml (identifiers, not secrets)"
   value = {
     GCP_PROJECT_ID   = var.project_id
     GCP_REGION       = var.region

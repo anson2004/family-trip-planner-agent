@@ -1,4 +1,4 @@
-# Where the container images live. The Build workflow in GitHub Actions pushes them here;
+# Where the container images live. The build job in GitHub Actions (pipeline.yml) pushes them here;
 # OpenTofu only deploys the image it is given (var.image).
 
 resource "google_artifact_registry_repository" "app" {

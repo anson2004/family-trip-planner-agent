@@ -40,11 +40,12 @@ resource "google_cloud_run_v2_job" "planner" {
           }
         }
 
+        # The names (TRIP_TO, EMAIL_TO...) aren't personal; only the values stay hidden in plans.
         dynamic "env" {
-          for_each = var.settings
+          for_each = nonsensitive(toset(keys(var.settings)))
           content {
-            name  = env.key
-            value = env.value
+            name  = env.value
+            value = var.settings[env.value]
           }
         }
 

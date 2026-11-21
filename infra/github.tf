@@ -27,7 +27,7 @@ locals {
   state_bucket     = "${var.project_id}-tfstate"
 }
 
-# Build workflow: may only push images to the travel-plan repository.
+# Build job: may only push images to the travel-plan repository.
 resource "google_service_account" "github_build" {
   account_id   = "github-build"
   display_name = "GitHub Actions: build images"
@@ -47,7 +47,7 @@ resource "google_service_account_iam_member" "github_build_login" {
   member             = local.github_principal
 }
 
-# Deploy workflow: runs `tofu apply`, so it needs rights over everything this folder manages,
+# Deploy job: runs `tofu apply`, so it needs rights over everything this folder manages,
 # plus the state and config in the bucket. Only master of var.github_repo can use it.
 resource "google_service_account" "github_deploy" {
   account_id   = "github-deploy"

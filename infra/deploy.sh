@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Deploy the newest image with OpenTofu. The Deploy workflow runs this; you can run it locally too.
+# Deploy the newest image with OpenTofu. The deploy job in pipeline.yml runs this; you can run it locally too.
 #
 #   PROJECT_ID=<project-id> infra/deploy.sh          # apply (asks first, unless in GitHub Actions)
 #   PROJECT_ID=<project-id> infra/deploy.sh plan     # only show what would change
@@ -7,7 +7,7 @@
 # terraform.tfvars (settings: trip, email...) is shared through the state bucket:
 #   - locally, your infra/terraform.tfvars is uploaded first, so your edits become the shared config;
 #   - in GitHub Actions (CI=true) it is downloaded from the bucket.
-# IMAGE=<image> overrides the image (default: the newest one pushed by the Build workflow).
+# IMAGE=<image> overrides the image (default: the newest one pushed by the build job).
 set -euo pipefail
 cd "$(dirname "$0")"
 

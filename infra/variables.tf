@@ -37,8 +37,11 @@ variable "time_zone" {
 }
 
 variable "settings" {
-  description = "Non-secret settings for the job: TRIP_*, EMAIL_TO, GROQ_MODEL... (same names as in .env)"
+  description = "Settings for the job: TRIP_*, EMAIL_TO, GROQ_MODEL... (same names as in .env)"
   type        = map(string)
+  # Not secret, but personal (email, trip). Sensitive keeps the values out of plan output,
+  # which is public in GitHub Actions logs for a public repo.
+  sensitive = true
 }
 
 variable "secrets" {
