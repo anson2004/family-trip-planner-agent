@@ -17,6 +17,7 @@ provider "google" {
 resource "google_project_service" "apis" {
   for_each = toset([
     "artifactregistry.googleapis.com",
+    "cloudresourcemanager.googleapis.com", # GitHub Actions' login needs it to read the project's services
     "cloudscheduler.googleapis.com",
     "iam.googleapis.com",
     "iamcredentials.googleapis.com", # GitHub Actions login

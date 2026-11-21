@@ -72,9 +72,10 @@ resource "google_project_iam_member" "github_deploy" {
   member  = "serviceAccount:${google_service_account.github_deploy.email}"
 }
 
+# Admin of this one bucket only: it reads and writes the state and config, and manages this grant itself.
 resource "google_storage_bucket_iam_member" "github_deploy_state" {
   bucket = local.state_bucket
-  role   = "roles/storage.objectAdmin"
+  role   = "roles/storage.admin"
   member = "serviceAccount:${google_service_account.github_deploy.email}"
 }
 
