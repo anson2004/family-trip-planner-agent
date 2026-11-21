@@ -30,7 +30,7 @@ def test_window_and_trip_length() -> None:
     assert r.dates_from(date(2027, 2, 17)) == (date(2027, 2, 17), date(2027, 2, 24))
     with pytest.raises(ValueError, match="between 2027-02-14 and 2027-02-21"):
         r.dates_from(date(2027, 2, 22))
-    assert r.dates_label() == "7 days, leaving 14 Feb – 21 Feb 2027 (back by 28 Feb)"
+    assert r.dates_label() == "7 nights, leaving 14 Feb – 21 Feb 2027 (back by 28 Feb)"
     with pytest.raises(ValueError, match="doesn't fit"):
         make_request(depart=date(2027, 2, 14), return_date=date(2027, 2, 18), trip_days=7)
     fixed = make_request()
@@ -54,6 +54,9 @@ def test_calendar_params_and_parse() -> None:
     assert params["engine"] == "google_flights_calendar" and params["round_trip_days"] == 7
     assert (params["date_range_start"], params["date_range_end"]) == ("2027-02-14", "2027-02-21")
     assert params["children"] == 1 and params["infants_on_lap"] == 1
+    assert "stops" not in params
+    nonstop = client.calendar_params(make_request(**WINDOW, max_stops=0), "TMP", "LPA")
+    assert nonstop["stops"] == 1  # same SerpApi code as the flight search: nonstop only
     rows = parse_calendar(load("calendar.json"))
     assert [r.outbound_date.day for r in rows] == [17, 20, 14]  # cheapest first; no-price row skipped
     assert rows[0].low_price and rows[0].return_date == date(2027, 2, 24)
@@ -61,14 +64,14 @@ def test_calendar_params_and_parse() -> None:
 
 def test_tools_need_a_date_when_flexible(tmp_path: Path) -> None:
     session = TripSession(request=make_request(**WINDOW), origin=resolve_origin("Tampere"))
-    client = SerpApiClient("key", JsonCache(tmp_path, 1))
-    tools = {t.name: t for t in build_tools(session, client, None, max_calls=5)}
+    client = SerpApiClient("key", JsonCache(tmp_path, 1), max_live_calls=5)
+    tools = {t.name: t for t in build_tools(session, client, None)}
     assert "find_cheapest_dates" in tools
     out = tools["search_flights"].invoke({"departure_airports": ["TMP"], "arrival_airports": ["LPA"]})
     assert "depart_date is required" in out and client.live_calls == 0
     out = tools["search_hotels"].invoke({"location": "Maspalomas", "depart_date": "2027-02-25"})
     assert "Invalid depart_date" in out
-    fixed = build_tools(TripSession(request=make_request(), origin=resolve_origin("Tampere")), client, None, 5)
+    fixed = build_tools(TripSession(request=make_request(), origin=resolve_origin("Tampere")), client, None)
     assert "find_cheapest_dates" not in {t.name for t in fixed}
 
 

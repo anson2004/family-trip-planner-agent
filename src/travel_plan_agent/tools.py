@@ -6,11 +6,22 @@ from typing import Literal
 from langchain_core.tools import BaseTool, tool
 
 from travel_plan_agent.models import FlightOption, HotelOption
-from travel_plan_agent.providers.serpapi import SerpApiClient, SerpApiError
+from travel_plan_agent.providers.serpapi import SerpApiClient, SerpApiError, SerpApiQuotaError
 from travel_plan_agent.providers.tavily import TavilyClient
 from travel_plan_agent.session import TripSession
 
 MAX_LISTED = 8
+QUOTA_USED_UP = "Search quota for this plan is used up. Work with the results you already have."
+
+
+def _stricter_max(a: int | None, b: int | None) -> int | None:
+    """The tighter of two optional upper limits (None = no limit)."""
+    return b if a is None else a if b is None else min(a, b)
+
+
+def _stricter_min(a: float | None, b: float | None) -> float | None:
+    """The tighter of two optional lower limits (None = no limit)."""
+    return b if a is None else a if b is None else max(a, b)
 
 
 def _duration(minutes: int | None) -> str:
@@ -49,13 +60,13 @@ def _hotel_line(opt: HotelOption) -> str:
     return " | ".join(parts)
 
 
-def build_tools(
-    session: TripSession, serpapi: SerpApiClient, tavily: TavilyClient | None, max_calls: int
-) -> list[BaseTool]:
+def build_tools(session: TripSession, serpapi: SerpApiClient, tavily: TavilyClient | None) -> list[BaseTool]:
+    """The agent's tools. The live-search cap is `serpapi.max_live_calls`; cached repeats are always free."""
     request = session.request
 
-    def quota_left() -> int:
-        return max_calls - serpapi.live_calls
+    def searches_left() -> str:
+        left = serpapi.live_calls_left
+        return "" if left is None else f" (searches left: {left})"
 
     def trip_dates(depart_date: str | None) -> tuple[date, date] | str:
         """The travel dates to search, or an error message for the agent."""
@@ -79,13 +90,20 @@ def build_tools(
             departure_airport: One IATA code to fly from, e.g. "TMP".
             arrival_airport: One IATA code to fly to, e.g. "LPA".
         """
-        if quota_left() <= 0:
-            return "Search quota for this plan is used up. Work with the results you already have."
         session.log(f"Cheapest dates {departure_airport} -> {arrival_airport}")
         try:
             rows, _ = serpapi.search_calendar(request, departure_airport.upper(), arrival_airport.upper())
+        except SerpApiQuotaError:
+            return QUOTA_USED_UP
         except SerpApiError as exc:
             return f"Date search failed: {exc}"
+        # Only trips the tools will accept: inside the window and exactly the trip length.
+        rows = [
+            r
+            for r in rows
+            if request.depart <= r.outbound_date <= request.latest_departure
+            and (r.return_date - r.outbound_date).days == request.nights
+        ]
         if not rows:
             return "No prices found for this route. Try another airport pair."
         lines = [
@@ -94,8 +112,8 @@ def build_tools(
             for r in rows[:8]
         ]
         return (
-            f"Cheapest {request.nights}-day trips {departure_airport}->{arrival_airport}, approximate prices "
-            f"(searches left: {quota_left()}):\n" + "\n".join(lines)
+            f"Cheapest {request.nights}-night trips {departure_airport}->{arrival_airport}, approximate prices"
+            f"{searches_left()}:\n" + "\n".join(lines)
         )
 
     @tool(parse_docstring=True)
@@ -110,19 +128,20 @@ def build_tools(
         Args:
             departure_airports: IATA codes to fly from, e.g. ["TMP", "HEL"]. Several codes are searched in one call.
             arrival_airports: IATA codes near the destination, e.g. ["LPA", "TFS"]. Up to 4 codes per call.
-            max_stops: 0 for nonstop only, 1 or 2 to limit stops, null for any.
+            max_stops: 0 for nonstop only, 1 or 2 to limit stops, null for any. The trip's own limit always applies.
             depart_date: Outbound date YYYY-MM-DD when the dates are flexible (return follows from trip length).
         """
         dates = trip_dates(depart_date)
         if isinstance(dates, str):
             return dates
-        if quota_left() <= 0:
-            return "Search quota for this plan is used up. Work with the results you already have."
         session.log(f"Flights {','.join(departure_airports)} -> {','.join(arrival_airports)} ({dates[0]})")
+        stops = _stricter_max(max_stops, request.max_stops)
         try:
             found, _ = serpapi.search_flights(
-                request, dates, departure_airports, arrival_airports[:4], max_stops, id_prefix="F"
+                request, dates, departure_airports, arrival_airports[:4], stops, id_prefix="F"
             )
+        except SerpApiQuotaError:
+            return QUOTA_USED_UP
         except SerpApiError as exc:
             return f"Flight search failed: {exc}"
         if not found:
@@ -130,10 +149,7 @@ def build_tools(
         added = session.add_flights(found)
         cheapest = sorted(added, key=lambda f: f.price_total + session.ground_transfer(f))[:MAX_LISTED]
         lines = [_flight_line(f, session.ground_transfer(f)) for f in cheapest]
-        return (
-            f"{len(added)} flights {dates[0]} -> {dates[1]}, cheapest shown (searches left: {quota_left()}):\n"
-            + "\n".join(lines)
-        )
+        return f"{len(added)} flights {dates[0]} -> {dates[1]}, cheapest shown{searches_left()}:\n" + "\n".join(lines)
 
     @tool(parse_docstring=True)
     def search_hotels(
@@ -142,42 +158,54 @@ def build_tools(
         min_rating: float | None = None,
         sort_by: Literal["price", "rating", "reviews"] = "price",
         depart_date: str | None = None,
+        near_airports: list[str] | None = None,
     ) -> str:
         """Search hotels and holiday apartments for the party. Prices are for the whole stay.
 
         Args:
             location: Specific area to stay, e.g. "Playa del Ingles, Gran Canaria" or "family hotel Alanya".
             max_price_per_night: Optional limit per night, in the trip currency.
-            min_rating: Optional minimum guest rating: 3.5, 4.0 or 4.5.
+            min_rating: Optional minimum guest rating: 3.5, 4.0 or 4.5. The trip's own minimum always applies.
             sort_by: "price" for cheapest first, "rating" for best rated first, or "reviews" for most reviewed.
             depart_date: Check-in date YYYY-MM-DD when the dates are flexible. Use the same date as the flights.
+            near_airports: IATA codes of the airport(s) serving this area, e.g. ["LPA"]. Shows package totals
+                with flights landing there; packages with flights landing elsewhere are rejected.
         """
         dates = trip_dates(depart_date)
         if isinstance(dates, str):
             return dates
-        if quota_left() <= 0:
-            return "Search quota for this plan is used up. Work with the results you already have."
         session.log(f"Hotels in {location} ({dates[0]})")
+        rating = _stricter_min(min_rating, request.hotel_min_rating)
         try:
             found, _ = serpapi.search_hotels(
-                request, dates, location, max_price_per_night, min_rating, sort_by, id_prefix="H"
+                request, dates, location, max_price_per_night, rating, sort_by, id_prefix="H"
             )
+        except SerpApiQuotaError:
+            return QUOTA_USED_UP
         except SerpApiError as exc:
             return f"Hotel search failed: {exc}"
         if not found:
             return "No hotels found. Try a broader location or a higher price limit."
-        added = session.add_hotels(found)[:MAX_LISTED]
+        airports = sorted({a.strip().upper() for a in near_airports or [] if a.strip()})
+        if airports:
+            found = [h.model_copy(update={"near_airports": airports}) for h in found]
+        added = session.add_hotels(found)
+        shown = added[:MAX_LISTED]
         # Price each hotel against the cheapest flight on the same dates from each departure airport,
-        # so the agent can see what fits the budget without extra LLM round-trips.
+        # so the agent can see what fits the budget without extra LLM round-trips. Only flights that land
+        # near this area count; with several destinations and no airports given, the match is unknown.
+        hint = ""
+        if not airports and len(request.destinations) > 1:
+            hint = "\nPass near_airports to see package totals with flights that land near these stays."
         cheapest: dict[str, FlightOption] = {}
         for f in session.flights.values():
-            if f.outbound_date != dates[0]:
+            if hint or f.outbound_date != dates[0] or (airports and f.arrival_airport not in airports):
                 continue
             best = cheapest.get(f.departure_airport)
             if best is None or f.price_total < best.price_total:
                 cheapest[f.departure_airport] = f
         lines = []
-        for h in added:
+        for h in shown:
             combos = [session.price(f, h) for f in cheapest.values()]
             line = _hotel_line(h)
             if combos:
@@ -187,8 +215,9 @@ def build_tools(
                 )
             lines.append(line)
         return (
-            f"{len(added)} stays in {location}, {dates[0]} -> {dates[1]} (searches left: {quota_left()}):\n"
+            f"{len(added)} stays in {location}, {dates[0]} -> {dates[1]}, first {len(shown)} shown{searches_left()}:\n"
             + "\n".join(lines)
+            + hint
         )
 
     @tool(parse_docstring=True)

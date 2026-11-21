@@ -34,7 +34,7 @@ uv run travel-plan --env-file trips/turkey.env   # another trip file (needs the 
 | `TRIP_TO` | `Gran Canaria` or `Gran Canaria,Tenerife,Madeira` | City, island, region or country; up to 5 comma-separated are compared in one plan. The agent picks the airports |
 | `TRIP_TRANSFER_COSTS` | `TKU:40,HEL:50` | Optional return-trip ground cost per traveller to other departure airports |
 | `TRIP_DEPART`, `TRIP_RETURN` | `2027-02-14`, `2027-02-28` | YYYY-MM-DD. Exact dates, or the search window when `TRIP_DAYS` is set |
-| `TRIP_DAYS` | `7` | Optional trip length. The agent checks the Google Flights price calendar and picks the cheapest dates in the window |
+| `TRIP_DAYS` | `7` | Optional trip length in nights (7 = Saturday to Saturday). The agent checks the Google Flights price calendar and picks the cheapest dates in the window |
 | `TRIP_BUDGET` | `2000-3500` | Total EUR for flights + accommodation for everyone, or just a max like `3500` |
 | `TRIP_ADULTS` | `2` | |
 | `TRIP_CHILDREN_AGES` | `6,3` | Under-2s fly as lap infants, 12+ pay adult fares. Empty = no children |

@@ -24,6 +24,10 @@ class SerpApiError(RuntimeError):
     pass
 
 
+class SerpApiQuotaError(SerpApiError):
+    """The plan's live-search cap is used up. Cached searches still work."""
+
+
 class SerpApiClient:
     def __init__(
         self,
@@ -33,6 +37,7 @@ class SerpApiClient:
         country: str = "fi",
         language: str = "en",
         http: httpx.Client | None = None,
+        max_live_calls: int | None = None,
     ) -> None:
         self._api_key = api_key
         self._cache = cache
@@ -40,6 +45,12 @@ class SerpApiClient:
         self._language = language
         self._http = http or httpx.Client(timeout=60)
         self.live_calls = 0
+        # None = no cap. Only live searches count; cached repeats are always allowed.
+        self.max_live_calls = max_live_calls
+
+    @property
+    def live_calls_left(self) -> int | None:
+        return None if self.max_live_calls is None else max(0, self.max_live_calls - self.live_calls)
 
     def _search(self, params: dict[str, Any]) -> tuple[dict[str, Any], bool]:
         """Run a search. Returns (response, came_from_cache)."""
@@ -47,6 +58,8 @@ class SerpApiClient:
         cached = self._cache.get("serpapi", params)
         if cached is not None:
             return cached, True
+        if self.live_calls_left == 0:
+            raise SerpApiQuotaError("search quota for this plan is used up")
         response = self._http.get(SERPAPI_URL, params={**params, "api_key": self._api_key})
         self.live_calls += 1
         try:
@@ -119,6 +132,9 @@ class SerpApiClient:
             params["children"] = pax.children
         if pax.infants_on_lap:
             params["infants_on_lap"] = pax.infants_on_lap
+        # Same stops filter as the flight search, so the cheapest dates are for flights the party would take.
+        if request.max_stops is not None:
+            params["stops"] = _STOPS_PARAM[request.max_stops]
         return params
 
     def search_calendar(self, request: TripRequest, departure_id: str, arrival_id: str) -> tuple[list[DatePrice], bool]:

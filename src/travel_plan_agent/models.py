@@ -50,7 +50,7 @@ class TripRequest(BaseModel):
 
     @property
     def nights(self) -> int:
-        """Length of the trip: days between leaving and coming back."""
+        """Length of the trip in nights: days between leaving and coming back (TRIP_DAYS=7 is Sat -> Sat)."""
         return self.trip_days if self.trip_days is not None else (self.return_date - self.depart).days
 
     @property
@@ -73,7 +73,7 @@ class TripRequest(BaseModel):
     def dates_label(self) -> str:
         if self.flexible:
             return (
-                f"{self.nights} days, leaving {self.depart:%d %b} – {self.latest_departure:%d %b %Y}"
+                f"{self.nights} nights, leaving {self.depart:%d %b} – {self.latest_departure:%d %b %Y}"
                 f" (back by {self.return_date:%d %b})"
             )
         return f"{self.depart:%d %b} – {self.return_date:%d %b %Y}"
@@ -131,6 +131,8 @@ class HotelOption(BaseModel):
     amenities: list[str] = Field(default_factory=list)
     sellers: list[str] = Field(default_factory=list)
     url: str | None
+    # Airports that serve this area, as given to search_hotels. Empty = unknown (no check).
+    near_airports: list[str] = Field(default_factory=list)
 
 
 class DatePrice(BaseModel):

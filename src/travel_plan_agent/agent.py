@@ -1,3 +1,4 @@
+import re
 from collections.abc import Callable
 from typing import Any
 
@@ -7,6 +8,7 @@ from langchain.agents.middleware import ModelRetryMiddleware
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 from langchain_groq import ChatGroq
+from langgraph.errors import GraphRecursionError
 
 from travel_plan_agent.cache import JsonCache
 from travel_plan_agent.config import Settings
@@ -38,7 +40,8 @@ How to work:
    departure airport when it is clearly cheaper overall, including the ground transfer.
    Explain that choice in origin_note.
 4. Search hotels for each destination that has reasonable flights (one search per destination),
-   in the area served by the best flights' arrival airport there. Prefer family-friendly
+   in the area served by the best flights' arrival airport there, and pass that airport as
+   near_airports so the results show package totals with matching flights. Prefer family-friendly
    places (pool, apartment/kitchen, beach). Room left for the hotel is roughly the budget maximum
    minus the flight price. Use max_price_per_night to stay within it.
 5. Call search_travel_agencies once for package holidays from Finnish tour operators. Packages are
@@ -68,7 +71,7 @@ def _system_prompt(request: TripRequest, session: TripSession, max_calls: int) -
     ]
     if request.flexible:
         dates_text = (
-            f"flexible. A {request.nights}-day trip leaving any day from {request.depart} to "
+            f"flexible. A {request.nights}-night trip leaving any day from {request.depart} to "
             f"{request.latest_departure} (back by {request.return_date}). You choose the dates."
         )
         date_step = (
@@ -119,17 +122,18 @@ def plan_trip(
 ) -> TravelPlan:
     """Run the agent and return a priced plan. `model` replaces the Groq model (useful for tests)."""
     cache = JsonCache(settings.cache_dir, settings.cache_ttl_hours)
+    # Automatic cap: 4 + 2 per destination, plus 1 date search per destination when the dates are flexible.
+    per_destination = 3 if request.flexible else 2
+    max_calls = settings.max_serpapi_calls or 4 + per_destination * len(request.destinations)
     serpapi = SerpApiClient(
         settings.serpapi_api_key.get_secret_value(),
         cache,
         country=settings.google_country,
         language=settings.google_language,
+        max_live_calls=max_calls,
     )
     tavily = TavilyClient(settings.tavily_api_key.get_secret_value(), cache) if settings.tavily_api_key else None
     session = TripSession(request=request, origin=resolve_origins(request.origins, request.transfer_costs), log=log)
-    # Automatic cap: 4 + 2 per destination, plus 1 date search per destination when the dates are flexible.
-    per_destination = 3 if request.flexible else 2
-    max_calls = settings.max_serpapi_calls or 4 + per_destination * len(request.destinations)
 
     if model is None:
         model = ChatGroq(
@@ -143,13 +147,16 @@ def plan_trip(
     # The agent researches with tools and finishes with a written recommendation. It is not forced
     # to answer through a tool: gpt-oss on Groq often breaks forced tool calls at the final step
     # ("tool_use_failed" / "output_parse_failed"). A separate small call turns the text into a plan.
+    system_prompt = _system_prompt(request, session, max_calls)
     agent: Any = create_agent(
         model,
-        tools=build_tools(session, serpapi, tavily, max_calls),
-        system_prompt=_system_prompt(request, session, max_calls),
+        tools=build_tools(session, serpapi, tavily),
+        system_prompt=system_prompt,
         middleware=[ModelRetryMiddleware(max_retries=2, retry_on=_is_generation_error, on_failure="error")],
     )
     state: dict[str, Any] = {"messages": []}
+    answer: str | None = None
+    failed_calls = 0
     try:
         # Stream so the conversation so far is kept even if a step fails.
         for chunk in agent.stream(
@@ -159,34 +166,112 @@ def plan_trip(
         ):
             state = chunk
         answer = _final_text(state["messages"])
+    except GraphRecursionError:
+        log("Agent ran out of steps; asking for its recommendation")
     except Exception as exc:
-        # After the retries, Groq still couldn't read a reply. Its error carries what the model wrote,
-        # and all search results are still in the session, so use that text instead of starting over.
-        answer = _failed_generation(exc) if _is_generation_error(exc) else None
-        if answer is None:
+        if not _is_generation_error(exc):
             raise
-        log("Model reply was malformed; using its text")
+        # After the retries, Groq still couldn't read a reply. Its error carries what the model wrote.
+        # That is only the recommendation if it names packages; it may be a broken search call instead.
+        failed_calls += 1
+        text = _failed_generation(exc)
+        if text and _names_a_package(text, session):
+            answer = text
+            log("Model reply was malformed; using its text")
+        else:
+            log("Model reply was malformed; asking for its recommendation")
+
+    llm_model = getattr(model, "model_name", type(model).__name__)
+    usage = token_usage(state["messages"], llm_model=llm_model)
+    _add_failed(usage, failed_calls, "agent step")
     if not answer:
-        raise RuntimeError("The agent finished without a recommendation.")
+        # All search results are still in the conversation, so ask for the recommendation instead of starting over.
+        answer, reply = _ask_for_recommendation(model, system_prompt, state["messages"], session)
+        if reply is None:
+            _add_failed(usage, 1, "final recommendation (asked again)")
+        else:
+            _add_calls(usage, [reply], "final recommendation (asked again)")
     log("Turning the recommendation into a plan")
-    draft, extra_calls = _draft_from_text(model, answer, session)
-    usage = token_usage(
-        [*state["messages"], *extra_calls], llm_model=getattr(model, "model_name", type(model).__name__)
-    )
-    for call in usage.calls[len(usage.calls) - len(extra_calls) :]:
-        call.action = "convert recommendation into plan"
+    draft, replies, failures = _draft_from_text(model, answer, session)
+    _add_calls(usage, replies, "convert recommendation into plan")
+    _add_failed(usage, failures, "convert recommendation into plan")
     usage.serpapi_searches = serpapi.live_calls
     usage.tavily_searches = tavily.live_calls if tavily else 0
-    return session.build_plan(draft, usage)
+    return session.build_plan(_keep_mentioned(draft, answer), usage)
 
 
 def _final_text(messages: list[BaseMessage]) -> str | None:
     """The agent's closing recommendation: the last AI message that isn't a tool call."""
     for msg in reversed(messages):
         if isinstance(msg, AIMessage) and not msg.tool_calls:
-            text = msg.text if isinstance(msg.text, str) else str(msg.content)
-            return text.strip() or None
+            return _text(msg)
     return None
+
+
+def _text(msg: AIMessage) -> str | None:
+    text = msg.text if isinstance(msg.text, str) else str(msg.content)
+    return text.strip() or None
+
+
+_ID = re.compile(r"\b[FHW]\d+\b")
+
+
+def _mentioned_ids(text: str) -> set[str]:
+    return set(_ID.findall(text))
+
+
+def _names_a_package(text: str, session: TripSession) -> bool:
+    """True when the text names at least one flight and one hotel the tools returned."""
+    ids = _mentioned_ids(text)
+    return bool(ids & session.flights.keys()) and bool(ids & session.hotels.keys())
+
+
+_ASK_AGAIN = (
+    "Stop searching now. Using only the search results above, write your final recommendation as plain text, "
+    "as described in step 8 of your instructions."
+)
+
+
+def _ask_for_recommendation(
+    model: BaseChatModel, system_prompt: str, messages: list[BaseMessage], session: TripSession
+) -> tuple[str, AIMessage | None]:
+    """One plain call (no tools) for the recommendation, from the conversation so far.
+
+    Returns the text and the reply (None when the text came from a Groq error)."""
+    history = list(messages)
+    # A tool call without its results can't be sent back to the API (the step limit can stop right after one).
+    if history and isinstance(history[-1], AIMessage) and history[-1].tool_calls:
+        history.pop()
+    try:
+        reply = model.invoke([SystemMessage(system_prompt), *history, HumanMessage(_ASK_AGAIN)])
+    except Exception as exc:
+        text = _failed_generation(exc) if _is_generation_error(exc) else None
+        if text and _names_a_package(text, session):
+            return text, None
+        raise RuntimeError("The agent finished without a recommendation.") from exc
+    text = _text(reply) if isinstance(reply, AIMessage) else None
+    if not text:
+        raise RuntimeError("The agent finished without a recommendation.")
+    return text, reply
+
+
+def _keep_mentioned(draft: PlanDraft, answer: str) -> PlanDraft:
+    """Drop picks the conversion step made up: every ID must appear in the agent's own recommendation."""
+    ids = _mentioned_ids(answer)
+    packages = [p for p in draft.packages if p.flight_id in ids and p.hotel_id in ids]
+    deals = [d for d in draft.agency_deals if d.result_id in ids]
+    warnings = list(draft.warnings)
+    warnings += [
+        f"Dropped {p.flight_id}+{p.hotel_id}: not in the agent's recommendation."
+        for p in draft.packages
+        if p not in packages
+    ]
+    warnings += [
+        f"Dropped agency deal {d.result_id}: not in the agent's recommendation."
+        for d in draft.agency_deals
+        if d not in deals
+    ]
+    return draft.model_copy(update={"packages": packages, "agency_deals": deals, "warnings": warnings})
 
 
 def _groq_error(exc: BaseException) -> dict[str, Any]:
@@ -216,8 +301,10 @@ _CONVERT_PROMPT = (
 )
 
 
-def _draft_from_text(model: BaseChatModel, text: str, session: TripSession) -> tuple[PlanDraft, list[AIMessage]]:
-    """Turn the agent's written recommendation into a PlanDraft. Returns it with the raw replies (for usage)."""
+def _draft_from_text(model: BaseChatModel, text: str, session: TripSession) -> tuple[PlanDraft, list[AIMessage], int]:
+    """Turn the agent's written recommendation into a PlanDraft.
+
+    Returns it with the raw replies and the number of calls that failed outright (for usage)."""
     prompt = _CONVERT_PROMPT.format(
         flights=", ".join(session.flights) or "none",
         hotels=", ".join(session.hotels) or "none",
@@ -229,6 +316,7 @@ def _draft_from_text(model: BaseChatModel, text: str, session: TripSession) -> t
     else:
         methods = [None, None, None]  # the model's default structured-output method
     raw_replies: list[AIMessage] = []
+    failures = 0
     last_error: object = None
     for method in methods:
         kwargs: dict[str, Any] = {"method": method} if method else {}
@@ -237,11 +325,12 @@ def _draft_from_text(model: BaseChatModel, text: str, session: TripSession) -> t
             result: Any = structured.invoke([SystemMessage(prompt), HumanMessage(text)])
         except Exception as exc:  # the conversion call can fail the same way; try again
             last_error = exc
+            failures += 1
             continue
         if isinstance(result.get("raw"), AIMessage):
             raw_replies.append(result["raw"])
         if isinstance(result.get("parsed"), PlanDraft):
-            return result["parsed"], raw_replies
+            return result["parsed"], raw_replies, failures
         last_error = result.get("parsing_error")
     raise RuntimeError(f"Could not turn the model's answer into a plan: {last_error}")
 
@@ -253,20 +342,34 @@ def _is_reasoning(model_name: str) -> bool:
 def token_usage(messages: list[BaseMessage], llm_model: str) -> Usage:
     """Add up the token counts the provider reported on each LLM response."""
     usage = Usage(llm_model=llm_model)
-    for msg in messages:
-        if not isinstance(msg, AIMessage):
-            continue
-        meta = msg.usage_metadata
-        call = LlmCall(
-            action=_describe(msg),
-            input_tokens=meta["input_tokens"] if meta else 0,
-            output_tokens=meta["output_tokens"] if meta else 0,
-        )
-        usage.calls.append(call)
-        usage.llm_calls += 1
-        usage.input_tokens += call.input_tokens
-        usage.output_tokens += call.output_tokens
+    _add_calls(usage, [m for m in messages if isinstance(m, AIMessage)])
     return usage
+
+
+def _add_calls(usage: Usage, replies: list[AIMessage], action: str | None = None) -> None:
+    for msg in replies:
+        meta = msg.usage_metadata
+        _record(
+            usage,
+            LlmCall(
+                action=action or _describe(msg),
+                input_tokens=meta["input_tokens"] if meta else 0,
+                output_tokens=meta["output_tokens"] if meta else 0,
+            ),
+        )
+
+
+def _add_failed(usage: Usage, count: int, action: str) -> None:
+    """Calls that ended in an error. The provider reports no tokens for them, so they count as 0."""
+    for _ in range(count):
+        _record(usage, LlmCall(action=f"{action} (failed, tokens not reported)"))
+
+
+def _record(usage: Usage, call: LlmCall) -> None:
+    usage.calls.append(call)
+    usage.llm_calls += 1
+    usage.input_tokens += call.input_tokens
+    usage.output_tokens += call.output_tokens
 
 
 def _describe(msg: AIMessage) -> str:

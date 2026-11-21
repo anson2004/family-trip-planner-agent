@@ -9,7 +9,7 @@ import httpx
 import pytest
 import respx
 from langchain_core.language_models import BaseChatModel
-from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
 from langchain_core.runnables import Runnable
 from langchain_core.tools import BaseTool
@@ -131,7 +131,7 @@ def test_tools_are_typed() -> None:
     from travel_plan_agent.tools import build_tools
 
     session = TripSession(request=make_request(), origin=resolve_origin("Tampere"))
-    tools: list[BaseTool] = build_tools(session, serpapi=None, tavily=None, max_calls=1)  # type: ignore[arg-type]
+    tools: list[BaseTool] = build_tools(session, serpapi=None, tavily=None)  # type: ignore[arg-type]
     schema_model = tools[0].tool_call_schema
     assert isinstance(schema_model, type) and issubclass(schema_model, BaseModel)
     schema = schema_model.model_json_schema()
@@ -139,14 +139,17 @@ def test_tools_are_typed() -> None:
     assert "IATA" in schema["properties"]["departure_airports"]["description"]
 
 
-def _generation_error(code: str = "tool_use_failed") -> groq.BadRequestError:
+FINAL_TABLE = "**PlanDraft**\n| 1 | **F1** | **H1** | resort |\n| 2 | **F2** | **H2** | cheap |"
+
+
+def _generation_error(code: str = "tool_use_failed", text: str = FINAL_TABLE) -> groq.BadRequestError:
     """The error Groq returns when the model writes text where a tool call was required."""
     body = {
         "error": {
             "message": "Tool choice is required, but model did not call a tool",
             "type": "invalid_request_error",
             "code": code,
-            "failed_generation": "**PlanDraft**\n| 1 | **F1** | **H1** | resort |\n| 2 | **F2** | **H2** | cheap |",
+            "failed_generation": text,
         }
     }
     response = httpx.Response(400, request=httpx.Request("POST", "https://api.groq.com/openai/v1/chat/completions"))
@@ -223,3 +226,91 @@ def test_other_errors_are_not_hidden(tmp_path: Path) -> None:
     settings = Settings(groq_api_key="x", serpapi_api_key="x", cache_dir=tmp_path, _env_file=None)
     with pytest.raises(RuntimeError, match="network down"):
         plan_trip(make_request(), settings, model=Broken(script=SCRIPT))
+
+
+class AskedAgainModel(ScriptedModel):
+    """Answers the "stop searching" request with a recommendation naming only F1 + H1."""
+
+    asked_again: int = 0
+    history_before_ask: list[BaseMessage] = []
+
+    def _generate(
+        self, messages: list[BaseMessage], stop: Any = None, run_manager: Any = None, **kw: Any
+    ) -> ChatResult:
+        last = messages[-1]
+        if isinstance(last, HumanMessage) and str(last.content).startswith("Stop searching"):
+            self.asked_again += 1
+            self.history_before_ask = messages[:-1]
+            reply = AIMessage(
+                content="F1 + H1: family resort, direct from Tampere.",
+                usage_metadata={"input_tokens": 7000, "output_tokens": 40, "total_tokens": 7040},
+            )
+            return ChatResult(generations=[ChatGeneration(message=reply)])
+        return super()._generate(messages, stop, run_manager, **kw)
+
+
+class BrokenSearchModel(AskedAgainModel):
+    """The web-search step keeps failing with a broken tool call that names no packages."""
+
+    def _generate(
+        self, messages: list[BaseMessage], stop: Any = None, run_manager: Any = None, **kw: Any
+    ) -> ChatResult:
+        step = sum(1 for m in messages if isinstance(m, AIMessage))
+        if not is_conversion(messages) and isinstance(messages[-1], ToolMessage) and step == 2:
+            raise _generation_error(text='{"name": "search_travel_agencies", "arguments": {"query": ')
+        return super()._generate(messages, stop, run_manager, **kw)
+
+
+@respx.mock
+def test_broken_search_call_is_not_used_as_the_answer(tmp_path: Path, no_sleep: None) -> None:
+    _mock_apis()
+    settings = Settings(groq_api_key="x", serpapi_api_key="x", tavily_api_key="x", cache_dir=tmp_path, _env_file=None)
+    model = BrokenSearchModel(script=SCRIPT)
+    logs: list[str] = []
+
+    plan = plan_trip(make_request(), settings, log=logs.append, model=model)
+
+    assert "Model reply was malformed; asking for its recommendation" in logs
+    assert model.asked_again == 1 and model.conversions == 1
+    # The conversion returns F2+H2, F1+H1 and W1, but the recommendation only named F1 + H1.
+    assert [p.why for p in plan.packages] == ["family resort, from Tampere"]
+    assert plan.agency_deals == []
+    assert "Dropped F2+H2: not in the agent's recommendation." in plan.warnings
+    actions = [c.action for c in plan.usage.calls]
+    assert actions[2:] == [
+        "agent step (failed, tokens not reported)",
+        "final recommendation (asked again)",
+        "convert recommendation into plan",
+    ]
+
+
+class EndlessSearchModel(AskedAgainModel):
+    """Searches flights and hotels, then repeats the flight search until the step limit stops it."""
+
+    def _generate(
+        self, messages: list[BaseMessage], stop: Any = None, run_manager: Any = None, **kw: Any
+    ) -> ChatResult:
+        step = sum(1 for m in messages if isinstance(m, AIMessage))
+        last = messages[-1]
+        asking = isinstance(last, HumanMessage) and str(last.content).startswith("Stop searching")
+        if is_conversion(messages) or asking or step < 2:
+            return super()._generate(messages, stop, run_manager, **kw)
+        again = call("search_flights", {"departure_airports": ["TMP"], "arrival_airports": ["LPA"]}, step + 1)
+        return ChatResult(generations=[ChatGeneration(message=again)])
+
+
+@respx.mock
+def test_step_limit_asks_for_the_recommendation(tmp_path: Path) -> None:
+    _mock_apis()
+    settings = Settings(groq_api_key="x", serpapi_api_key="x", cache_dir=tmp_path, _env_file=None)
+    model = EndlessSearchModel(script=SCRIPT)
+    logs: list[str] = []
+
+    plan = plan_trip(make_request(), settings, log=logs.append, model=model)
+
+    assert "Agent ran out of steps; asking for its recommendation" in logs
+    assert model.asked_again == 1
+    last = model.history_before_ask[-1]
+    assert not (isinstance(last, AIMessage) and last.tool_calls)  # no tool call left without its result
+    assert [p.why for p in plan.packages] == ["family resort, from Tampere"]
+    assert plan.usage.serpapi_searches == 3  # TMP+HEL, hotels, TMP only; the repeats came from the cache

@@ -91,6 +91,12 @@ class TripSession:
                     f"({hotel.check_in}) are on different dates."
                 )
                 continue
+            if hotel.near_airports and flight.arrival_airport not in hotel.near_airports:
+                warnings.append(
+                    f"Dropped {flight.id}+{hotel.id}: the flight lands at {flight.arrival_airport}, but the stay "
+                    f"is near {', '.join(hotel.near_airports)}."
+                )
+                continue
             if (flight.id, hotel.id) in seen:
                 continue
             seen.add((flight.id, hotel.id))
